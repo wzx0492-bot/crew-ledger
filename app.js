@@ -1,689 +1,302 @@
 (function () {
   'use strict';
 
-  var STORAGE_KEY = 'crewLedgerDataV1';
-  var DEFAULT_CATEGORIES = ['制作人员', '制作筹备', '设备器材', '场景租赁', '置景', '道具', '服化', '演员', '餐饮', '差旅', '交通', '保险', '后期制作', '制片杂费', '备用金'];
-  var DEFAULT_DEPARTMENTS = ['制片组', '导演组', '摄影组', '灯光组', '录音组', '美术组', '服化道', '演员组', '后期组', '宣传组'];
+  var STORAGE_KEY = 'crewProductionDeskV2';
+  var DEFAULT_CATEGORIES = ['制作筹备', '制作人员', '设备器材', '场景租赁', '置景', '道具', '服化', '演员', '餐饮', '差旅交通', '保险', '后期制作', '制片杂费', '备用金'];
+  var DEFAULT_DEPARTMENTS = ['制片组', '导演组', '摄影组', '灯光组', '录音组', '美术组', '服化组', '演员组', '后期组'];
+  var DEFAULT_DEPARTMENT_ROLES = { '制片组': ['制片主任', '制片助理', '现场制片', '生活制片'], '导演组': ['导演', '副导演', '场记'], '摄影组': ['摄影指导', '摄影师', '摄影助理'], '灯光组': ['灯光指导', '灯光师', '灯光助理'], '录音组': ['录音师', '录音助理'], '美术组': ['美术指导', '道具', '置景'], '服化组': ['服装', '化妆', '造型'], '演员组': ['演员统筹', '主要演员', '群演'], '后期组': ['剪辑', '调色', '声音', '包装'] };
   var INCOME_CATEGORIES = ['赞助', '经费', '集资'];
-  var PAYMENT_METHODS = ['微信', '支付宝', '现金', '银行卡', '其他'];
   var REIMBURSEMENT = ['无需报销', '待提交', '已报销'];
+  var SCENE_STATUSES = ['未拍', '已拍', '需补拍'];
+  var TASK_COLORS = ['#DC2626', '#D97706', '#CA8A04', '#16A34A', '#2563EB', '#7C3AED', '#DB2777', '#64748B'];
   var app = document.getElementById('app');
   var modal = document.getElementById('modal');
   var modalContent = document.getElementById('modalContent');
   var importInput = document.getElementById('importInput');
   var state = loadState();
 
-  function uid(prefix) {
-    return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  }
-
-  function isoToday() {
-    var d = new Date();
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  }
-
-  function newState() {
-    return {
-      projects: [],
-      currentProjectId: null,
-      screen: 'projects',
-      tab: 'overview',
-      scheduleMode: 'week',
-      weekStart: dateKey(startOfWeek(new Date())),
-      ledgerFilters: { q: '', category: '', payer: '', status: '', type: '' }
-    };
-  }
-
-  function loadState() {
-    try {
-      var saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      return Object.assign(newState(), saved || {});
-    } catch (error) {
-      return newState();
-    }
-  }
-
-  function saveState() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (error) {
-      toast('存储空间不足，请减少票据照片或先导出备份');
-    }
-  }
-
-  function esc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-  }
-
-  function fmtMoney(value) {
-    return '¥' + Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
-  }
-
-  function fmtDate(value, short) {
-    if (!value) return '未设置';
-    var d = new Date(value + 'T00:00:00');
-    if (isNaN(d)) return value;
-    return short ? (d.getMonth() + 1) + '月' + d.getDate() + '日' : d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
-  }
-
-  function currentProject() {
-    return state.projects.find(function (p) { return p.id === state.currentProjectId; }) || null;
-  }
-
-  function projectSpent(project) {
-    return project.transactions.filter(function (t) { return t.type === 'expense'; }).reduce(function (sum, t) { return sum + Number(t.amount || 0); }, 0);
-  }
-
-  function projectIncome(project) {
-    return project.transactions.filter(function (t) { return t.type === 'income'; }).reduce(function (sum, t) { return sum + Number(t.amount || 0); }, 0);
-  }
-
-  function categorySpent(project, category) {
-    return project.transactions.filter(function (t) { return t.type === 'expense' && t.category === category; }).reduce(function (sum, t) { return sum + Number(t.amount || 0); }, 0);
-  }
-
-  function startOfWeek(date) {
-    var d = new Date(date);
-    d.setHours(0, 0, 0, 0);
-    var day = d.getDay() || 7;
-    d.setDate(d.getDate() - day + 1);
-    return d;
-  }
-
-  function addDays(date, days) {
-    var d = new Date(date);
-    d.setDate(d.getDate() + days);
-    return d;
-  }
-
-  function dateKey(date) {
-    return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
-  }
-
-  function toast(message) {
-    var el = document.getElementById('toast');
-    el.textContent = message;
-    el.classList.add('show');
-    clearTimeout(toast.timer);
-    toast.timer = setTimeout(function () { el.classList.remove('show'); }, 2400);
-  }
-
-  function openModal(html) {
-    modalContent.innerHTML = '<div class="modal-body">' + html + '</div>';
-    modal.showModal();
-  }
-
-  function closeModal() {
-    modal.close();
-    modalContent.innerHTML = '';
-  }
+  function uid(prefix) { return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+  function isoToday() { return dateKey(new Date()); }
+  function dateKey(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function startOfWeek(date) { var d = new Date(date); d.setHours(0, 0, 0, 0); var day = d.getDay() || 7; d.setDate(d.getDate() - day + 1); return d; }
+  function addDays(date, n) { var d = new Date(date); d.setDate(d.getDate() + n); return d; }
+  function newState() { return { projects: [], currentProjectId: null, screen: 'projects', module: null, productionView: 'overview', coordinationView: 'timeline', reimbursementView: '待提交', sceneView: 'master', weekStart: dateKey(startOfWeek(new Date())), selectedReimbursements: [], ledgerFilters: { q: '', category: '', payer: '', status: '', type: '' } }; }
+  function normalizeState(data) { var next = Object.assign(newState(), data || {}); next.projects = Array.isArray(next.projects) ? next.projects : []; next.projects.forEach(function (p) { p.categories = Array.isArray(p.categories) ? p.categories : []; p.timelineTasks = Array.isArray(p.timelineTasks) ? p.timelineTasks : []; p.departments = Array.isArray(p.departments) ? p.departments : DEFAULT_DEPARTMENTS.slice(); if (!p.departmentRoleSchemaVersion) { var existingRoles = p.departmentRoles && typeof p.departmentRoles === 'object' ? p.departmentRoles : {}; p.departmentRoles = {}; p.departments.forEach(function (dept) { p.departmentRoles[dept] = Array.isArray(existingRoles[dept]) ? existingRoles[dept] : (DEFAULT_DEPARTMENT_ROLES[dept] || []).slice(); }); p.departmentRoleSchemaVersion = 1; } else if (!p.departmentRoles || typeof p.departmentRoles !== 'object') p.departmentRoles = {}; if (!p.categorySchemaVersion) { if (!p.categories.some(function (c) { return c.name === '制作人员'; })) { var at = p.categories.findIndex(function (c) { return c.name === '制作筹备'; }); p.categories.splice(at < 0 ? 0 : at + 1, 0, { id: uid('cat'), name: '制作人员', budget: 0 }); } p.categorySchemaVersion = 1; } }); return next; }
+  function loadState() { try { return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}); } catch (e) { return newState(); } }
+  function saveState() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { toast('存储空间不足，请减少票据照片或先导出备份'); } }
+  function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
+  function fmtMoney(v) { return '¥' + Number(v || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 }); }
+  function fmtDate(v, short) { if (!v) return '未设置'; var d = new Date(v + 'T00:00:00'); if (isNaN(d)) return v; return short ? (d.getMonth() + 1) + '月' + d.getDate() + '日' : d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日'; }
+  function taskColor(v) { return /^#[0-9a-f]{6}$/i.test(v || '') ? v : '#D97706'; }
+  function syncPeoplePayees(p) { p.contacts = p.contacts || { payers: [], payees: [] }; p.contacts.payees = Array.isArray(p.contacts.payees) ? p.contacts.payees : []; (p.people || []).forEach(function (person) { var name = String(person.name || '').trim(); if (name && p.contacts.payees.indexOf(name) < 0) p.contacts.payees.push(name); }); }
+  function currentProject() { return state.projects.find(function (p) { return p.id === state.currentProjectId; }) || null; }
+  function expenses(p) { return p.transactions.filter(function (t) { return t.type === 'expense'; }); }
+  function projectSpent(p) { return expenses(p).reduce(function (s, t) { return s + Number(t.amount || 0); }, 0); }
+  function projectIncome(p) { return p.transactions.filter(function (t) { return t.type === 'income'; }).reduce(function (s, t) { return s + Number(t.amount || 0); }, 0); }
+  function pendingAmount(p) { return expenses(p).filter(function (t) { return t.reimbursementStatus === '待提交'; }).reduce(function (s, t) { return s + Number(t.amount || 0); }, 0); }
+  function categorySpent(p, name) { return expenses(p).filter(function (t) { return t.category === name; }).reduce(function (s, t) { return s + Number(t.amount || 0); }, 0); }
+  function toast(msg) { var el = document.getElementById('toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(function () { el.classList.remove('show'); }, 2400); }
+  function openModal(html, wide) { modal.classList.toggle('modal-wide', !!wide); modalContent.innerHTML = '<div class="modal-body">' + html + '</div>'; modal.showModal(); }
+  function closeModal() { modal.close(); modal.classList.remove('modal-wide'); modalContent.innerHTML = ''; }
+  function pageTitle(title, subtitle, actions) { return '<div class="page-head"><div><h1>' + esc(title) + '</h1><p>' + esc(subtitle) + '</p></div><div class="page-actions">' + (actions || '') + '</div></div>'; }
+  function empty(title, text, action) { return '<div class="empty"><div class="empty-visual">片</div><h2>' + esc(title) + '</h2><p>' + esc(text) + '</p>' + (action || '') + '</div>'; }
 
   function topbar(project) {
-    return [
-      '<header class="topbar"><div class="topbar-inner">',
-      project ? '<button class="btn icon-btn btn-ghost" data-action="back-projects" aria-label="返回项目">‹</button>' : '',
-      '<div class="brand"><div class="brand-mark">账</div><div class="brand-copy">',
-      '<div class="brand-title">片场账本</div>',
-      '<div class="brand-sub">' + (project ? esc(project.name) : '学生剧组制片工具') + '</div>',
-      '</div></div>',
-      '<div class="top-actions">',
-      project ? '<button class="btn btn-primary" data-action="new-transaction">＋ 记一笔</button>' : '<button class="btn btn-primary" data-action="new-project">＋ 新建项目</button>',
-      '</div></div></header>'
-    ].join('');
+    var back = project ? '<button class="btn icon-btn btn-ghost" data-action="back" aria-label="返回">‹</button>' : '';
+    var sub = project ? project.name + (state.module ? ' · ' + ({ production: '制片', coordination: '统筹', reimbursement: '报销' }[state.module]) : '') : '学生剧组制作管理';
+    return '<header class="topbar"><div class="topbar-inner">' + back + '<div class="brand"><div class="brand-mark">片</div><div class="brand-copy"><div class="brand-title">片场工作台</div><div class="brand-sub">' + esc(sub) + '</div></div></div></div></header>';
   }
-
-  function projectNav() {
-    var items = [
-      ['overview', '⌂', '概览'],
-      ['ledger', '￥', '账目'],
-      ['schedule', '□', '计划'],
-      ['settings', '•••', '项目']
-    ];
-    return '<nav class="bottom-nav" aria-label="项目导航">' + items.map(function (item) {
-      return '<button class="nav-item ' + (state.tab === item[0] ? 'active' : '') + '" data-action="tab" data-tab="' + item[0] + '"><span>' + item[1] + '</span><span>' + item[2] + '</span></button>';
-    }).join('') + '</nav>';
+  function moduleNav() {
+    var items = state.module === 'production' ? [['overview', '总览'], ['ledger', '账目'], ['settings', '设置']] : state.module === 'coordination' ? [['timeline', '时间总表'], ['week', '周事务'], ['scenes', '顺场'], ['people', '人员']] : [['待提交', '待提交'], ['已报销', '已报销']];
+    var current = state.module === 'production' ? state.productionView : state.module === 'coordination' ? state.coordinationView : state.reimbursementView;
+    return '<nav class="bottom-nav cols-' + items.length + '" aria-label="模块导航">' + items.map(function (x) { return '<button class="nav-item ' + (current === x[0] ? 'active' : '') + '" data-action="module-view" data-view="' + x[0] + '"><span class="nav-dot"></span><span>' + x[1] + '</span></button>'; }).join('') + '</nav>';
   }
-
   function render() {
-    var project = currentProject();
-    if (state.screen === 'project' && project) {
-      app.innerHTML = '<div class="app-shell">' + topbar(project) + projectNav() + '<main class="main">' + renderProject(project) + '</main></div>';
-    } else {
-      state.screen = 'projects';
-      app.innerHTML = '<div class="app-shell">' + topbar(null) + '<main class="main">' + renderProjects() + '</main></div>';
-    }
+    var p = currentProject();
+    if (state.screen === 'project' && p) app.innerHTML = '<div class="app-shell">' + topbar(p) + (state.module ? moduleNav() : '') + '<main class="main">' + (state.module ? renderModule(p) : renderModuleHub(p)) + '</main></div>';
+    else { state.screen = 'projects'; state.module = null; app.innerHTML = '<div class="app-shell">' + topbar(null) + '<main class="main">' + renderProjects() + '</main></div>'; }
+    if (p && state.module === 'coordination' && state.coordinationView === 'people') enablePeopleSort(p);
   }
-
   function renderProjects() {
-    var active = state.projects.filter(function (p) { return !p.archived; });
-    var archived = state.projects.filter(function (p) { return p.archived; });
-    var html = [
-      '<div class="page-head"><div><h1>我的短片</h1><p>每个项目独立管理预算、账目和制片计划。</p></div>',
-      '<button class="btn btn-primary" data-action="new-project">＋ 新建项目</button></div>'
-    ];
-    if (!state.projects.length) {
-      html.push('<section class="card empty"><div class="empty-visual">￥</div><h2>从第一部短片开始</h2><p>创建项目后，就可以设置预算、记录垫付款和票据，并安排从前期到后期的事务。</p><button class="btn btn-primary" data-action="new-project">创建短片项目</button></section>');
-      return html.join('');
-    }
-    if (active.length) {
-      html.push('<div class="project-grid">' + active.map(projectCard).join('') + '</div>');
-    }
-    if (archived.length) {
-      html.push('<div class="section-head" style="margin-top:28px"><h2>已归档</h2><span class="muted">' + archived.length + ' 个项目</span></div>');
-      html.push('<div class="project-grid">' + archived.map(projectCard).join('') + '</div>');
-    }
-    return html.join('');
+    var active = state.projects.filter(function (p) { return !p.archived; }), archived = state.projects.filter(function (p) { return p.archived; });
+    var html = pageTitle('我的短片', '先选择短片项目，再进入制片、统筹或报销模块。', '<button class="btn btn-primary" data-action="new-project">＋ 新建项目</button>');
+    if (!state.projects.length) return html + '<section class="card">' + empty('从第一部短片开始', '创建项目后即可管理预算、计划、顺场和报销。', '<button class="btn btn-primary" data-action="new-project">创建短片项目</button>') + '</section>';
+    function card(p) { return '<article class="card project-card ' + (p.archived ? 'archived' : '') + '" data-action="open-project" data-id="' + p.id + '"><div class="project-top"><h2 class="project-name">' + esc(p.name) + '</h2><span class="tag">' + (p.archived ? '已归档' : '进行中') + '</span></div><div class="project-dates">' + fmtDate(p.startDate, true) + '—' + fmtDate(p.endDate, true) + '</div><div class="project-stats"><div class="mini-stat"><span>总预算</span><strong>' + fmtMoney(p.totalBudget) + '</strong></div><div class="mini-stat"><span>已花费</span><strong>' + fmtMoney(projectSpent(p)) + '</strong></div><div class="mini-stat"><span>待报销</span><strong>' + fmtMoney(pendingAmount(p)) + '</strong></div></div><div class="project-card-actions"><button type="button" class="project-delete" data-action="delete-project-list" data-id="' + p.id + '" aria-label="删除项目' + esc(p.name) + '">删除项目</button></div></article>'; }
+    if (active.length) html += '<div class="project-grid">' + active.map(card).join('') + '</div>';
+    if (archived.length) html += '<div class="section-head archive-head"><h2>已归档</h2><span class="muted">' + archived.length + ' 个项目</span></div><div class="project-grid">' + archived.map(card).join('') + '</div>';
+    return html;
+  }
+  function renderModuleHub(p) {
+    var spent = projectSpent(p);
+    var recentLedger = p.transactions.slice().sort(function (a, b) { return b.date.localeCompare(a.date); }).slice(0, 5).map(function (t) { return { title: t.description || t.category, meta: fmtDate(t.date, true) + ' · ' + t.category, value: (t.type === 'income' ? '+' : '−') + fmtMoney(t.amount) }; });
+    var recentPlans = (p.timelineTasks || []).concat(p.tasks || []).sort(function (a, b) { var af = a.date >= isoToday() ? 0 : 1, bf = b.date >= isoToday() ? 0 : 1; return af - bf || (af === 0 ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)); }).slice(0, 5).map(function (t) { return { title: t.title, meta: fmtDate(t.date, true) + (t.department ? ' · ' + t.department : ' · 时间总表'), value: t.status === 'done' ? '完成' : '待办' }; });
+    var recentClaims = expenses(p).filter(function (t) { return t.reimbursementStatus === '待提交'; }).sort(function (a, b) { return b.date.localeCompare(a.date); }).slice(0, 5).map(function (t) { return { title: t.description || t.category, meta: fmtDate(t.date, true) + ' · ' + (t.payer || '未填付款人'), value: fmtMoney(t.amount) }; });
+    return pageTitle(p.name, fmtDate(p.startDate) + '—' + fmtDate(p.endDate), '<button class="btn" data-action="edit-project">编辑项目</button>') + '<div class="module-grid">' + moduleCard('production', '制片模块', '预算、收入、支出与票据', '剩余预算', fmtMoney(Number(p.totalBudget || 0) - spent), '制', '最近台账', recentLedger) + moduleCard('coordination', '统筹模块', '计划、顺场与人员', '顺场场次', p.scenes.length + ' 场', '统', '最近计划', recentPlans) + moduleCard('reimbursement', '报销模块', '按付款人整理与导出报销单', '待提交', fmtMoney(pendingAmount(p)), '报', '最近需报销', recentClaims) + '</div><section class="card section quick-note"><strong>项目工作流</strong><p>顺场表维护拍摄场次与人物；制片账目中的待提交支出自动进入报销模块。</p></section>';
+  }
+  function moduleCard(key, title, desc, label, value, mark, recentLabel, recentRows) {
+    var recent = recentRows.length ? recentRows.map(function (r) { return '<span class="module-recent-row"><span><strong>' + esc(r.title) + '</strong><small>' + esc(r.meta) + '</small></span><b>' + esc(r.value) + '</b></span>'; }).join('') : '<span class="module-recent-empty">暂无记录</span>';
+    return '<button class="card module-card module-' + key + '" data-action="enter-module" data-module="' + key + '"><span class="module-intro"><span class="module-mark">' + mark + '</span><span class="module-copy"><strong>' + title + '</strong><small>' + desc + '</small></span></span><span class="module-recent"><span class="module-recent-label">' + recentLabel + '</span>' + recent + '</span><span class="module-summary"><small>' + label + '</small><strong>' + value + '</strong></span></button>';
+  }
+  function renderModule(p) { if (state.module === 'production') return state.productionView === 'ledger' ? renderLedger(p) : state.productionView === 'settings' ? renderSettings(p) : renderProductionOverview(p); if (state.module === 'coordination') return renderCoordination(p); return renderReimbursement(p); }
+
+  function renderProductionOverview(p) {
+    var spent = projectSpent(p), remaining = Number(p.totalBudget || 0) - spent, income = projectIncome(p), recent = p.transactions.slice().sort(function (a, b) { return b.date.localeCompare(a.date); }).slice(0, 6);
+    return pageTitle('制片总览', '预算、实际花费和收入集中管理。', '<button class="btn btn-primary" data-action="new-transaction">＋ 记一笔</button>') + '<div class="metrics"><section class="card metric metric-main"><span>总预算</span><strong>' + fmtMoney(p.totalBudget) + '</strong><small>实际收入 ' + fmtMoney(income) + '</small></section><section class="card metric"><span>已花费</span><strong>' + fmtMoney(spent) + '</strong><small>' + (p.totalBudget ? Math.round(spent / p.totalBudget * 100) : 0) + '% 预算已使用</small></section><section class="card metric"><span>剩余预算</span><strong>' + fmtMoney(remaining) + '</strong><small>' + (remaining < 0 ? '当前已超出预算' : '可继续使用') + '</small></section></div><div class="two-col"><section class="card section"><div class="section-head"><h2>分类预算</h2><button class="btn" data-action="edit-budgets">管理</button></div>' + renderCategoryProgress(p) + '</section><section class="card section"><div class="section-head"><h2>最近账目</h2><button class="btn" data-action="module-view" data-view="ledger">查看全部</button></div>' + (recent.length ? '<div class="list">' + recent.map(transactionRow).join('') + '</div>' : '<p class="muted">还没有账目。</p>') + '</section></div>';
+  }
+  function renderCategoryProgress(p) { var rows = p.categories.filter(function (c) { return Number(c.budget || 0) || categorySpent(p, c.name); }); if (!rows.length) return '<p class="muted">暂未设置分类预算。</p>'; return rows.map(function (c) { var s = categorySpent(p, c.name), ratio = c.budget ? Math.round(s / c.budget * 100) : 0; return '<div class="progress-row"><div class="progress-meta"><strong>' + esc(c.name) + '</strong><span>' + fmtMoney(s) + ' / ' + fmtMoney(c.budget) + '</span></div><div class="progress-track"><div class="progress-fill ' + (ratio > 100 ? 'over' : '') + '" style="width:' + Math.min(ratio, 100) + '%"></div></div></div>'; }).join(''); }
+  function transactionRow(t) { return '<button class="list-row row-button" data-action="edit-transaction" data-id="' + t.id + '"><span class="list-main"><span class="list-title">' + esc(t.description || t.category) + '</span><span class="list-meta">' + fmtDate(t.date, true) + ' · ' + esc(t.category) + (t.payer ? ' · ' + esc(t.payer) : '') + '</span></span><span class="amount ' + t.type + '">' + (t.type === 'income' ? '+' : '−') + fmtMoney(t.amount) + '</span></button>'; }
+  function filterSelect(name, options, value) { return '<div class="field"><select data-filter="' + name + '">' + options.map(function (o) { return '<option value="' + esc(o[0]) + '" ' + (value === o[0] ? 'selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select></div>'; }
+  function renderLedger(p) {
+    var f = state.ledgerFilters, rows = p.transactions.filter(function (t) { var q = f.q.toLowerCase(); return (!f.type || t.type === f.type) && (!f.category || t.category === f.category) && (!f.payer || t.payer === f.payer) && (!f.status || t.reimbursementStatus === f.status) && (!q || [t.description, t.note, t.payee, t.payer].join(' ').toLowerCase().indexOf(q) >= 0); }).sort(function (a, b) { return b.date.localeCompare(a.date); }), cats = p.categories.map(function (c) { return c.name; }).concat(INCOME_CATEGORIES);
+    return pageTitle('账目', '支出按单价和数量计算总金额，票据可上传多张。', '<button class="btn" data-action="export-production-excel">导出 Excel</button><button class="btn" data-action="export-production-pdf">导出 PDF</button><button class="btn btn-primary" data-action="new-transaction">＋ 记一笔</button>') + '<section class="card section"><div class="toolbar"><div class="field"><input class="input" data-filter="q" value="' + esc(f.q) + '" placeholder="搜索用途、人员或备注"></div>' + filterSelect('type', [['', '全部类型'], ['expense', '支出'], ['income', '收入']], f.type) + filterSelect('category', [['', '全部分类']].concat(cats.map(function (x) { return [x, x]; })), f.category) + filterSelect('payer', [['', '全部付款人']].concat(p.contacts.payers.map(function (x) { return [x, x]; })), f.payer) + filterSelect('status', [['', '全部报销状态']].concat(REIMBURSEMENT.map(function (x) { return [x, x]; })), f.status) + '</div>' + (rows.length ? '<div class="table-wrap"><table><thead><tr><th>日期</th><th>用途</th><th>分类</th><th>单价</th><th>数量</th><th>付款人</th><th>报销</th><th>总金额</th><th></th></tr></thead><tbody>' + rows.map(function (t) { return '<tr><td>' + esc(t.date) + '</td><td><strong>' + esc(t.description || '未填写') + '</strong>' + (t.receipts && t.receipts.length ? '<div class="list-meta">' + t.receipts.length + ' 张票据</div>' : '') + '</td><td>' + esc(t.category) + '</td><td>' + (t.type === 'expense' ? fmtMoney(t.unitPrice) : '—') + '</td><td>' + (t.type === 'expense' ? Number(t.quantity || 1) : '—') + '</td><td>' + esc(t.payer || '—') + '</td><td>' + esc(t.reimbursementStatus || '—') + '</td><td class="amount ' + t.type + '">' + (t.type === 'income' ? '+' : '−') + fmtMoney(t.amount) + '</td><td><button class="text-btn" data-action="edit-transaction" data-id="' + t.id + '">编辑</button></td></tr>'; }).join('') + '</tbody></table></div>' : empty('没有符合条件的账目', '调整筛选条件，或者新增一笔收支。', '')) + '</section>';
   }
 
-  function projectCard(project) {
-    var spent = projectSpent(project);
-    var remain = Number(project.totalBudget || 0) - spent;
-    return [
-      '<article class="card project-card ' + (project.archived ? 'archived' : '') + '" data-action="open-project" data-id="' + project.id + '">',
-      '<div class="project-top"><h2 class="project-name">' + esc(project.name) + '</h2><span class="tag ' + (project.archived ? 'tag-orange' : '') + '">' + (project.archived ? '已归档' : '进行中') + '</span></div>',
-      '<div class="project-dates">' + fmtDate(project.startDate, true) + '—' + fmtDate(project.endDate, true) + '</div>',
-      '<div class="project-stats"><div class="mini-stat"><span>已花费</span><strong>' + fmtMoney(spent) + '</strong></div><div class="mini-stat"><span>剩余预算</span><strong>' + fmtMoney(remain) + '</strong></div></div>',
-      '</article>'
-    ].join('');
+  function renderCoordination(p) { if (state.coordinationView === 'callsheets') { state.coordinationView = 'scenes'; saveState(); } if (state.coordinationView === 'timeline') return renderTimeline(p); if (state.coordinationView === 'scenes') return renderScenes(p); if (state.coordinationView === 'people') return renderPeople(p); return renderWeek(p); }
+  function coordActions(kind, primary) { return '<button class="btn" data-action="export-coord-excel" data-kind="' + kind + '">导出 Excel</button><button class="btn" data-action="export-coord-pdf" data-kind="' + kind + '">导出 PDF</button>' + (primary || ''); }
+  function renderWeek(p) {
+    var start = new Date(state.weekStart + 'T00:00:00'), days = Array.from({ length: 7 }, function (_, i) { return addDays(start, i); });
+    var headers = '<div class="cal-cell cal-head cal-dept">部门</div>' + days.map(function (d) { var key = dateKey(d); return '<div class="cal-cell cal-head ' + (key === isoToday() ? 'today' : '') + '">周' + ['日', '一', '二', '三', '四', '五', '六'][d.getDay()] + '<br><strong>' + (d.getMonth() + 1) + '/' + d.getDate() + '</strong></div>'; }).join('');
+    var body = p.departments.map(function (dept) { return '<div class="cal-cell cal-dept">' + esc(dept) + '</div>' + days.map(function (d) { var key = dateKey(d), tasks = p.tasks.filter(function (t) { return t.department === dept && t.date === key; }); return '<div class="cal-cell">' + tasks.map(function (t) { return '<button class="task-chip ' + (t.status === 'done' ? 'done' : '') + '" style="--task-color:' + taskColor(t.color) + '" data-action="edit-task" data-id="' + t.id + '">' + esc(t.title) + '</button>'; }).join('') + '<button class="cell-add" data-action="new-task-date" data-date="' + key + '" data-dept="' + esc(dept) + '">＋</button></div>'; }).join(''); }).join('');
+    return pageTitle('周事务表', '以日期为表头，按部门查看待办和完成事项。', coordActions('week', '<button class="btn btn-primary" data-action="new-task">＋ 加事务</button>')) + '<section class="card section"><div class="week-controls"><button class="btn icon-btn" data-action="week-prev">‹</button><div class="week-label">' + fmtDate(dateKey(days[0]), true) + '—' + fmtDate(dateKey(days[6]), true) + '</div><button class="btn icon-btn" data-action="week-next">›</button></div><div class="calendar"><div class="calendar-grid">' + headers + body + '</div></div></section>';
   }
-
-  function renderProject(project) {
-    if (state.tab === 'ledger') return renderLedger(project);
-    if (state.tab === 'schedule') return renderSchedule(project);
-    if (state.tab === 'settings') return renderSettings(project);
-    return renderOverview(project);
+  function renderTimeline(p) { var items = p.timelineTasks || [], dates = [p.startDate, p.endDate].concat(items.map(function (t) { return t.date; })).filter(Boolean).sort(), first = dates[0] || isoToday(), last = dates[dates.length - 1] || first, start = startOfWeek(new Date(first + 'T00:00:00')), finalWeek = startOfWeek(new Date(last + 'T00:00:00')), weeks = []; for (var i = 0, cursor = start; i < 104 && cursor <= finalWeek; i++, cursor = addDays(cursor, 7)) weeks.push(Array.from({ length: 7 }, function (_, day) { return addDays(cursor, day); })); var calendar = weeks.map(function (days) { return '<div class="timeline-week"><div class="timeline-week-grid">' + days.map(function (d) { var key = dateKey(d), dayItems = items.filter(function (t) { return t.date === key; }), outside = (p.startDate && key < p.startDate) || (p.endDate && key > p.endDate); return '<div class="timeline-day ' + (outside ? 'outside' : '') + '"><div class="timeline-day-head ' + (key === isoToday() ? 'today' : '') + '"><span>周' + ['日', '一', '二', '三', '四', '五', '六'][d.getDay()] + '</span><strong>' + (d.getMonth() + 1) + '/' + d.getDate() + '</strong></div><div class="timeline-day-body">' + dayItems.map(function (t) { return '<button class="task-chip ' + (t.status === 'done' ? 'done' : '') + '" style="--task-color:' + taskColor(t.color) + '" data-action="edit-timeline-task" data-id="' + t.id + '">' + esc(t.title) + '</button>'; }).join('') + '<button class="cell-add" data-action="new-timeline-task-date" data-date="' + key + '">＋</button></div></div>'; }).join('') + '</div></div>'; }).join(''); return pageTitle('时间总表', '从前期到后期按日期查看独立计划，表头仅显示日期和星期。', coordActions('timeline', '<button class="btn" data-action="import-week-tasks">从周事务选择</button><button class="btn btn-primary" data-action="new-timeline-task">＋ 加事务</button>')) + '<section class="card section"><div class="timeline-calendar">' + calendar + '</div></section>'; }
+  function sceneFields(s) { return [s.location, s.sceneNo, s.sceneName, s.dayNight, s.interiorExterior, s.shotCount || '', s.duration || '', s.cast, s.props, s.setDress, s.costume, s.makeup, s.status, s.note]; }
+  function renderScenes(p) {
+    var rows = p.scenes.slice().sort(function (a, b) { return String(a.sceneNo).localeCompare(String(b.sceneNo), 'zh-CN', { numeric: true }); }); if (state.sceneView === 'location') rows.sort(function (a, b) { return a.location.localeCompare(b.location, 'zh-CN') || String(a.sceneNo).localeCompare(String(b.sceneNo), 'zh-CN', { numeric: true }); });
+    return pageTitle('顺场表', '主顺场维护一次，分场顺场按拍摄地点自动归类。', coordActions('scenes', '<button class="btn btn-primary" data-action="new-scene">＋ 添加场次</button>')) + '<div class="segmented compact"><button class="' + (state.sceneView === 'master' ? 'active' : '') + '" data-action="scene-view" data-view="master">主顺场</button><button class="' + (state.sceneView === 'location' ? 'active' : '') + '" data-action="scene-view" data-view="location">分场顺场</button></div><section class="card section">' + (rows.length ? '<div class="table-wrap"><table class="wide-table"><thead><tr><th>拍摄地</th><th>场号</th><th>场景</th><th>日/夜</th><th>内/外</th><th>镜头</th><th>预计时长</th><th>人物</th><th>道具</th><th>陈设</th><th>服装</th><th>化妆</th><th>状态</th><th></th></tr></thead><tbody>' + rows.map(function (s, i) { var group = state.sceneView === 'location' && (i === 0 || rows[i - 1].location !== s.location) ? '<tr class="group-row"><td colspan="14">' + esc(s.location || '未填写拍摄地') + '</td></tr>' : ''; return group + '<tr><td>' + esc(s.location) + '</td><td><strong>' + esc(s.sceneNo) + '</strong></td><td>' + esc(s.sceneName) + '</td><td>' + esc(s.dayNight) + '</td><td>' + esc(s.interiorExterior) + '</td><td>' + esc(s.shotCount || '—') + '</td><td>' + esc(s.duration || '—') + '</td><td>' + esc(s.cast || '—') + '</td><td>' + esc(s.props || '—') + '</td><td>' + esc(s.setDress || '—') + '</td><td>' + esc(s.costume || '—') + '</td><td>' + esc(s.makeup || '—') + '</td><td><span class="status">' + esc(s.status) + '</span></td><td><button class="text-btn" data-action="edit-scene" data-id="' + s.id + '">编辑</button></td></tr>'; }).join('') + '</tbody></table></div>' : empty('还没有场次', '添加场次后可按地点自动生成分场顺场，作为拍摄安排基础。', '<button class="btn btn-primary" data-action="new-scene">添加场次</button>')) + '</section>';
   }
-
-  function pageTitle(title, subtitle, action) {
-    return '<div class="page-head"><div><h1>' + title + '</h1><p>' + subtitle + '</p></div>' + (action || '') + '</div>';
-  }
-
-  function renderOverview(project) {
-    var spent = projectSpent(project);
-    var remaining = Number(project.totalBudget || 0) - spent;
-    var income = projectIncome(project);
-    var recent = project.transactions.slice().sort(function (a, b) { return b.date.localeCompare(a.date); }).slice(0, 5);
-    var todoToday = project.tasks.filter(function (t) { return t.date === isoToday() && t.status !== 'done'; });
-    var settlements = settlementRows(project);
-    return [
-      pageTitle('项目概览', '预算、花费和待处理事项一目了然。', '<button class="btn" data-action="new-task">＋ 加事务</button>'),
-      '<div class="metrics">',
-      '<section class="card metric metric-main"><span class="metric-label">总预算</span><strong class="metric-value">' + fmtMoney(project.totalBudget) + '</strong><div class="metric-note">实际收入 ' + fmtMoney(income) + '</div></section>',
-      '<section class="card metric"><span class="metric-label">已花费</span><strong class="metric-value">' + fmtMoney(spent) + '</strong><div class="metric-note">' + (project.totalBudget ? Math.round(spent / project.totalBudget * 100) : 0) + '% 预算已使用</div></section>',
-      '<section class="card metric"><span class="metric-label">剩余预算</span><strong class="metric-value">' + fmtMoney(remaining) + '</strong><div class="metric-note">' + (remaining < 0 ? '当前已超出预算' : '可继续使用') + '</div></section>',
-      '</div>',
-      '<div class="two-col"><div class="card section"><div class="section-head"><h2>分类预算</h2><button class="btn" data-action="edit-budgets">管理预算</button></div>',
-      renderCategoryProgress(project),
-      '</div><div class="card section"><div class="section-head"><h2>今日事务</h2><span class="tag">' + todoToday.length + ' 项</span></div>',
-      todoToday.length ? '<div class="list">' + todoToday.map(taskListRow).join('') + '</div>' : '<p class="muted">今天没有待办，拍摄顺利。</p>',
-      '</div></div>',
-      '<div class="two-col" style="margin-top:16px"><div class="card section"><div class="section-head"><h2>最近账目</h2><button class="btn" data-action="tab" data-tab="ledger">查看全部</button></div>',
-      recent.length ? '<div class="list">' + recent.map(transactionListRow).join('') + '</div>' : '<p class="muted">还没有账目，点击右上角“记一笔”开始。</p>',
-      '</div><div class="card section"><div class="section-head"><h2>垫付与结算</h2><span class="muted">按付款人</span></div>',
-      settlements.length ? '<div class="list">' + settlements.slice(0, 6).map(function (row) {
-        return '<div class="list-row"><div class="list-main"><div class="list-title">' + esc(row.name) + '</div><div class="list-meta">待报销 ' + fmtMoney(row.pending) + '</div></div><span class="amount">' + fmtMoney(row.total) + '</span></div>';
-      }).join('') + '</div>' : '<p class="muted">录入付款人后，这里会自动汇总垫付款。</p>',
-      '</div></div>'
-    ].join('');
-  }
-
-  function renderCategoryProgress(project) {
-    var rows = project.categories.filter(function (c) { return Number(c.budget || 0) > 0 || categorySpent(project, c.name) > 0; });
-    if (!rows.length) return '<p class="muted">暂未设置分类预算。</p>';
-    return rows.map(function (cat) {
-      var spent = categorySpent(project, cat.name);
-      var ratio = cat.budget ? Math.round(spent / cat.budget * 100) : 0;
-      return '<div class="progress-row"><div class="progress-meta"><strong>' + esc(cat.name) + '</strong><span>' + fmtMoney(spent) + ' / ' + fmtMoney(cat.budget) + '</span></div><div class="progress-track"><div class="progress-fill ' + (ratio > 100 ? 'over' : '') + '" style="width:' + Math.min(ratio, 100) + '%"></div></div></div>';
-    }).join('');
-  }
-
-  function taskListRow(task) {
-    return '<div class="list-row"><input class="check" type="checkbox" data-action="toggle-task" data-id="' + task.id + '" ' + (task.status === 'done' ? 'checked' : '') + '><div class="list-main"><div class="list-title">' + esc(task.title) + '</div><div class="list-meta">' + esc(task.department) + ' · ' + fmtDate(task.date, true) + '</div></div><button class="btn icon-btn" data-action="edit-task" data-id="' + task.id + '">•••</button></div>';
-  }
-
-  function transactionListRow(tx) {
-    return '<div class="list-row" data-action="edit-transaction" data-id="' + tx.id + '"><div class="list-main"><div class="list-title">' + esc(tx.description || tx.category) + '</div><div class="list-meta">' + fmtDate(tx.date, true) + ' · ' + esc(tx.category) + (tx.payer ? ' · ' + esc(tx.payer) : '') + '</div></div><span class="amount ' + tx.type + '">' + (tx.type === 'income' ? '+' : '−') + fmtMoney(tx.amount) + '</span></div>';
-  }
-
-  function settlementRows(project) {
-    var map = {};
-    project.transactions.filter(function (t) { return t.type === 'expense' && t.payer; }).forEach(function (t) {
-      if (!map[t.payer]) map[t.payer] = { name: t.payer, total: 0, pending: 0, reimbursed: 0 };
-      map[t.payer].total += Number(t.amount || 0);
-      if (t.reimbursementStatus === '待提交') map[t.payer].pending += Number(t.amount || 0);
-      if (t.reimbursementStatus === '已报销') map[t.payer].reimbursed += Number(t.amount || 0);
+  function renderPeople(p) {
+    var departmentNames = p.departments.slice();
+    p.people.forEach(function (person) {
+      var dept = person.department || '未分组';
+      if (departmentNames.indexOf(dept) < 0) departmentNames.push(dept);
     });
-    return Object.keys(map).map(function (key) { return map[key]; }).sort(function (a, b) { return b.total - a.total; });
-  }
-
-  function renderLedger(project) {
-    var f = state.ledgerFilters;
-    var rows = project.transactions.filter(function (t) {
-      var q = f.q.toLowerCase();
-      return (!f.type || t.type === f.type)
-        && (!f.category || t.category === f.category)
-        && (!f.payer || t.payer === f.payer)
-        && (!f.status || t.reimbursementStatus === f.status)
-        && (!q || [t.description, t.note, t.payee, t.payer].join(' ').toLowerCase().indexOf(q) >= 0);
-    }).sort(function (a, b) { return b.date.localeCompare(a.date); });
-    var categories = project.categories.map(function (c) { return c.name; }).concat(INCOME_CATEGORIES);
-    return [
-      pageTitle('账目', '记录收入、支出、票据和报销状态。', '<button class="btn btn-primary" data-action="new-transaction">＋ 记一笔</button>'),
-      '<section class="card section"><div class="toolbar">',
-      '<div class="field"><input class="input" data-filter="q" value="' + esc(f.q) + '" placeholder="搜索说明、人员或备注"></div>',
-      '<div class="field"><select data-filter="type"><option value="">全部类型</option><option value="expense" ' + (f.type === 'expense' ? 'selected' : '') + '>支出</option><option value="income" ' + (f.type === 'income' ? 'selected' : '') + '>收入</option></select></div>',
-      '<div class="field"><select data-filter="category"><option value="">全部分类</option>' + categories.map(function (c) { return '<option ' + (f.category === c ? 'selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div>',
-      '<div class="field"><select data-filter="payer"><option value="">全部付款人</option>' + project.contacts.payers.map(function (c) { return '<option ' + (f.payer === c ? 'selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div>',
-      '<div class="field"><select data-filter="status"><option value="">全部报销状态</option>' + REIMBURSEMENT.map(function (s) { return '<option ' + (f.status === s ? 'selected' : '') + '>' + s + '</option>'; }).join('') + '</select></div>',
-      '</div>',
-      rows.length ? '<div class="table-wrap"><table><thead><tr><th>日期</th><th>说明</th><th>分类</th><th>付款人</th><th>报销</th><th>金额</th><th></th></tr></thead><tbody>' + rows.map(function (tx) {
-        return '<tr><td>' + esc(tx.date) + '</td><td><strong>' + esc(tx.description || '未填写') + '</strong>' + (tx.receipts && tx.receipts.length ? '<div class="list-meta">' + tx.receipts.length + ' 张票据</div>' : '') + '</td><td>' + esc(tx.category) + '</td><td>' + esc(tx.payer || '—') + '</td><td>' + esc(tx.reimbursementStatus || '—') + '</td><td class="amount ' + tx.type + '">' + (tx.type === 'income' ? '+' : '−') + fmtMoney(tx.amount) + '</td><td><div class="row-actions"><button data-action="edit-transaction" data-id="' + tx.id + '">编辑</button></div></td></tr>';
-      }).join('') + '</tbody></table></div>' : '<div class="empty"><h2>没有符合条件的账目</h2><p>调整筛选条件，或者新增一笔收支。</p></div>',
-      '</section>'
-    ].join('');
-  }
-
-  function renderSchedule(project) {
-    return [
-      pageTitle('制片计划', '按部门和日期安排从前期到后期的事务。', '<button class="btn btn-primary" data-action="new-task">＋ 加事务</button>'),
-      '<div class="tabs"><button class="tab ' + (state.scheduleMode === 'week' ? 'active' : '') + '" data-action="schedule-mode" data-mode="week">周事务表</button><button class="tab ' + (state.scheduleMode === 'timeline' ? 'active' : '') + '" data-action="schedule-mode" data-mode="timeline">时间总表</button></div>',
-      state.scheduleMode === 'timeline' ? renderTimeline(project) : renderWeek(project)
-    ].join('');
-  }
-
-  function renderWeek(project) {
-    var start = new Date(state.weekStart + 'T00:00:00');
-    var days = Array.from({ length: 7 }, function (_, i) { return addDays(start, i); });
-    var headers = '<div class="cal-cell cal-head cal-dept">部门</div>' + days.map(function (d) {
-      var key = dateKey(d);
-      return '<div class="cal-cell cal-head ' + (key === isoToday() ? 'today' : '') + '">' + ['日', '一', '二', '三', '四', '五', '六'][d.getDay()] + '<br><strong>' + (d.getMonth() + 1) + '/' + d.getDate() + '</strong></div>';
+    var groups = departmentNames.map(function (dept) {
+      return { name: dept, people: p.people.filter(function (person) { return (person.department || '未分组') === dept; }) };
+    }).filter(function (group) { return group.people.length; });
+    var directory = groups.map(function (group) {
+      var isActors = group.name === '演员组';
+      return '<section class="people-department"><div class="people-department-head"><h3>' + esc(group.name) + '</h3><span>' + group.people.length + ' 人</span></div><div class="table-wrap"><table><thead><tr><th class="person-drag-column"><span class="sr-only">排序</span></th><th>姓名</th>' + (isActors ? '<th>角色</th>' : '') + '<th>细分岗位</th><th>手机号</th><th></th></tr></thead><tbody data-people-list>' + group.people.map(function (person) { return '<tr data-person-row data-id="' + person.id + '"><td class="person-drag-column"><button type="button" class="drag-handle person-drag-handle" data-action="drag-person" aria-label="长按拖动' + esc(person.name) + '排序" title="长按拖动排序">⠿</button></td><td><strong>' + esc(person.name) + '</strong></td>' + (isActors ? '<td><strong class="character-name">' + esc(person.character || '—') + '</strong></td>' : '') + '<td>' + esc(person.role || '—') + '</td><td>' + esc(person.phone || '—') + '</td><td><button class="text-btn" data-action="edit-person" data-id="' + person.id + '">编辑</button></td></tr>'; }).join('') + '</tbody></table></div></section>';
     }).join('');
-    var body = project.departments.map(function (dept) {
-      return '<div class="cal-cell cal-dept">' + esc(dept) + '</div>' + days.map(function (d) {
-        var key = dateKey(d);
-        var tasks = project.tasks.filter(function (t) { return t.department === dept && t.date === key; });
-        return '<div class="cal-cell">' + tasks.map(function (task) {
-          return '<button class="task-chip ' + (task.status === 'done' ? 'done' : '') + '" data-action="edit-task" data-id="' + task.id + '">' + esc(task.title) + '</button>';
-        }).join('') + '<button class="btn btn-ghost" style="min-height:28px;padding:3px 7px;font-size:.74rem" data-action="new-task-date" data-date="' + key + '" data-dept="' + esc(dept) + '">＋</button></div>';
-      }).join('');
-    }).join('');
-    return '<section class="card section"><div class="week-controls"><button class="btn icon-btn" data-action="week-prev">‹</button><div class="week-label">' + fmtDate(dateKey(days[0]), true) + '—' + fmtDate(dateKey(days[6]), true) + '</div><button class="btn icon-btn" data-action="week-next">›</button></div><div class="calendar"><div class="calendar-grid">' + headers + body + '</div></div></section>';
+    return pageTitle('人员与车辆', '维护全剧组通讯录、角色和车辆安排。', coordActions('people', '<button class="btn" data-action="new-vehicle">＋ 车辆</button><button class="btn btn-primary" data-action="new-person">＋ 人员</button>')) + '<div class="two-col people-layout"><section class="card section"><div class="section-head"><h2>剧组通讯录</h2><span class="tag">' + p.people.length + ' 人</span></div>' + (p.people.length ? '<div class="people-departments">' + directory + '</div>' : '<p class="muted">暂未添加人员。</p>') + '</section><section class="card section"><div class="section-head"><h2>车辆安排</h2><span class="tag">' + p.vehicles.length + ' 辆</span></div>' + (p.vehicles.length ? '<div class="list">' + p.vehicles.map(function (v) { return '<button class="list-row row-button" data-action="edit-vehicle" data-id="' + v.id + '"><span class="list-main"><span class="list-title">' + esc(v.name) + ' · ' + esc(v.driver) + '</span><span class="list-meta">' + esc(v.meetingPoint || '未填集合点') + ' · ' + esc(v.departTime || '未填时间') + '</span><span class="list-meta">乘员：' + esc(v.passengers || '未填写') + '</span></span></button>'; }).join('') + '</div>' : '<p class="muted">暂未添加车辆。</p>') + '</section></div>';
   }
-
-  function renderTimeline(project) {
-    var tasks = project.tasks.slice().sort(function (a, b) { return a.date.localeCompare(b.date) || a.department.localeCompare(b.department); });
-    return '<section class="card section">' + (tasks.length ? '<div class="timeline">' + tasks.map(function (task) {
-      return '<div class="timeline-row"><div class="timeline-date">' + fmtDate(task.date, true) + '</div><div><strong>' + esc(task.title) + '</strong><div class="list-meta">' + esc(task.department) + '</div></div><input class="check" type="checkbox" data-action="toggle-task" data-id="' + task.id + '" ' + (task.status === 'done' ? 'checked' : '') + '></div>';
-    }).join('') + '</div>' : '<div class="empty"><h2>还没有制片事务</h2><p>添加事务后，它们会按日期排列在总表里。</p><button class="btn btn-primary" data-action="new-task">添加事务</button></div>') + '</section>';
-  }
-
-  function renderSettings(project) {
-    return [
-      pageTitle('项目设置', '管理项目资料、模板和数据。', ''),
-      '<div class="settings-grid">',
-      '<section class="card section"><div class="section-head"><h2>项目资料</h2><button class="btn" data-action="edit-project" data-id="' + project.id + '">编辑</button></div><div class="list">',
-      '<div class="list-row"><div class="list-main"><div class="list-title">项目周期</div><div class="list-meta">' + fmtDate(project.startDate) + '—' + fmtDate(project.endDate) + '</div></div></div>',
-      '<div class="list-row"><div class="list-main"><div class="list-title">总预算</div><div class="list-meta">' + fmtMoney(project.totalBudget) + '</div></div></div>',
-      '<div class="list-row"><div class="list-main"><div class="list-title">状态</div><div class="list-meta">' + (project.archived ? '已归档' : '进行中') + '</div></div><button class="btn" data-action="toggle-archive">' + (project.archived ? '取消归档' : '归档项目') + '</button></div>',
-      '</div></section>',
-      '<section class="card section"><div class="section-head"><h2>预算与分类</h2><button class="btn" data-action="edit-budgets">管理</button></div><p class="muted">共 ' + project.categories.length + ' 个支出分类，可为每类分别设置预算。</p><div class="notice">分类预算之和可以与总预算不同，方便保留机动空间。</div></section>',
-      '<section class="card section"><div class="section-head"><h2>计划部门</h2><button class="btn" data-action="edit-departments">管理</button></div><p class="muted">' + project.departments.map(esc).join('、') + '</p></section>',
-      '<section class="card section"><div class="section-head"><h2>常用人员</h2><button class="btn" data-action="edit-contacts">管理</button></div><p class="muted">付款人 ' + project.contacts.payers.length + ' 位，收款方 ' + project.contacts.payees.length + ' 位。</p></section>',
-      '<section class="card section"><div class="section-head"><h2>提醒</h2><button class="btn" data-action="enable-notifications">开启通知</button></div><p class="muted">事务当天在打开网站时提醒。安装到桌面后使用更方便。</p></section>',
-      '<section class="card section"><div class="section-head"><h2>导出与备份</h2></div><div class="list"><button class="btn" data-action="export-excel">导出 Excel</button><button class="btn" data-action="export-pdf">导出 PDF</button><button class="btn" data-action="export-backup">导出数据备份</button><button class="btn" data-action="import-backup">导入数据备份</button></div></section>',
-      '<section class="card section danger-zone"><div class="section-head"><h2>删除项目</h2></div><p class="muted">删除后无法恢复，建议先导出数据备份。</p><button class="btn btn-danger" data-action="delete-project">删除这个项目</button></section>',
-      '</div>'
-    ].join('');
-  }
-
-  function openProjectForm(project) {
-    var editing = !!project;
-    openModal([
-      '<div class="modal-head"><h2>' + (editing ? '编辑项目' : '新建短片项目') + '</h2><button class="close-btn" data-action="close-modal">×</button></div>',
-      '<form id="projectForm"><div class="form-grid">',
-      '<div class="field full"><label>项目名称</label><input name="name" required maxlength="40" value="' + esc(project ? project.name : '') + '" placeholder="例如：毕业短片《海风》"></div>',
-      '<div class="field"><label>开始日期</label><input type="date" name="startDate" required value="' + esc(project ? project.startDate : isoToday()) + '"></div>',
-      '<div class="field"><label>结束日期</label><input type="date" name="endDate" required value="' + esc(project ? project.endDate : isoToday()) + '"></div>',
-      '<div class="field full"><label>总预算（元）</label><input type="number" name="totalBudget" min="0" step="0.01" value="' + esc(project ? project.totalBudget : '') + '" placeholder="0"></div>',
-      '</div><div class="form-actions"><button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" type="submit">保存项目</button></div></form>'
-    ].join(''));
-    document.getElementById('projectForm').addEventListener('submit', function (event) {
-      event.preventDefault();
-      var fd = new FormData(event.currentTarget);
-      if (editing) {
-        project.name = fd.get('name').trim();
-        project.startDate = fd.get('startDate');
-        project.endDate = fd.get('endDate');
-        project.totalBudget = Number(fd.get('totalBudget') || 0);
-      } else {
-        var created = {
-          id: uid('project'),
-          name: fd.get('name').trim(),
-          startDate: fd.get('startDate'),
-          endDate: fd.get('endDate'),
-          totalBudget: Number(fd.get('totalBudget') || 0),
-          archived: false,
-          categories: DEFAULT_CATEGORIES.map(function (name) { return { id: uid('cat'), name: name, budget: 0 }; }),
-          departments: DEFAULT_DEPARTMENTS.slice(),
-          contacts: { payers: [], payees: [] },
-          transactions: [],
-          tasks: []
-        };
-        state.projects.push(created);
-        state.currentProjectId = created.id;
-        state.screen = 'project';
-        state.tab = 'overview';
+  function enablePeopleSort(p) {
+    var lists = Array.from(document.querySelectorAll('[data-people-list]'));
+    function persistOrder() {
+      var peopleById = {};
+      p.people.forEach(function (person) { peopleById[person.id] = person; });
+      var ordered = Array.from(document.querySelectorAll('[data-person-row]')).map(function (row) { return peopleById[row.dataset.id]; }).filter(Boolean);
+      if (ordered.length === p.people.length) { p.people = ordered; saveState(); }
+    }
+    lists.forEach(function (list) {
+      var active = null, holdTimer = null, pointerId = null, startY = 0, moved = false;
+      function stop(save) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+        if (active) active.classList.remove('dragging');
+        if (save && active && moved) { persistOrder(); toast('人员顺序已保存'); }
+        active = null;
+        pointerId = null;
+        moved = false;
       }
-      saveState();
-      closeModal();
-      render();
-      toast('项目已保存');
-    });
-  }
-
-  function openTransactionForm(id, presetType) {
-    var project = currentProject();
-    var tx = project.transactions.find(function (t) { return t.id === id; });
-    var editing = !!tx;
-    var type = tx ? tx.type : (presetType || 'expense');
-    var existingReceipts = tx && tx.receipts ? tx.receipts : [];
-    function formHtml(selectedType) {
-      var categories = selectedType === 'income' ? INCOME_CATEGORIES : project.categories.map(function (c) { return c.name; });
-      return [
-        '<div class="modal-head"><h2>' + (editing ? '编辑账目' : '记一笔') + '</h2><button class="close-btn" data-action="close-modal">×</button></div>',
-        '<div class="segmented" style="margin-bottom:18px"><button type="button" class="' + (selectedType === 'expense' ? 'active' : '') + '" data-action="transaction-type" data-type="expense">支出</button><button type="button" class="' + (selectedType === 'income' ? 'active' : '') + '" data-action="transaction-type" data-type="income">收入</button></div>',
-        '<form id="transactionForm" data-type="' + selectedType + '"><div class="form-grid">',
-        '<div class="field"><label>日期</label><input type="date" name="date" required value="' + esc(tx ? tx.date : isoToday()) + '"></div>',
-        '<div class="field"><label>金额（元）</label><input type="number" name="amount" min="0" step="0.01" required value="' + esc(tx ? tx.amount : '') + '" placeholder="0"></div>',
-        '<div class="field"><label>分类</label><select name="category" required>' + categories.map(function (c) { return '<option ' + (tx && tx.category === c ? 'selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div>',
-        '<div class="field"><label>说明</label><input name="description" maxlength="80" value="' + esc(tx ? tx.description : '') + '" placeholder="' + (selectedType === 'income' ? '例如：学院拍摄经费' : '例如：拍摄日盒饭') + '"></div>',
-        selectedType === 'expense' ? [
-          '<div class="field"><label>付款人</label><input name="payer" list="payerList" value="' + esc(tx ? tx.payer : '') + '" placeholder="谁先垫付"><datalist id="payerList">' + project.contacts.payers.map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('') + '</datalist></div>',
-          '<div class="field"><label>收款方</label><input name="payee" list="payeeList" value="' + esc(tx ? tx.payee : '') + '" placeholder="商家或个人"><datalist id="payeeList">' + project.contacts.payees.map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('') + '</datalist></div>',
-          '<div class="field"><label>支付方式</label><select name="paymentMethod">' + PAYMENT_METHODS.map(function (m) { return '<option ' + (tx && tx.paymentMethod === m ? 'selected' : '') + '>' + m + '</option>'; }).join('') + '</select></div>',
-          '<div class="field"><label>报销状态</label><select name="reimbursementStatus">' + REIMBURSEMENT.map(function (s) { return '<option ' + (tx && tx.reimbursementStatus === s ? 'selected' : '') + '>' + s + '</option>'; }).join('') + '</select></div>',
-          '<div class="field full"><label>票据照片（可多选）</label><input type="file" name="receipts" accept="image/*" multiple><div class="receipt-preview">' + existingReceipts.map(function (src) { return '<img src="' + src + '" alt="票据">'; }).join('') + '</div></div>'
-        ].join('') : '',
-        '<div class="field full"><label>备注</label><textarea name="note" placeholder="可选">' + esc(tx ? tx.note : '') + '</textarea></div>',
-        '</div><div class="form-actions">' + (editing ? '<button type="button" class="btn btn-danger" data-action="delete-transaction" data-id="' + tx.id + '">删除</button>' : '') + '<button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" type="submit">保存账目</button></div></form>'
-      ].join('');
-    }
-    openModal(formHtml(type));
-    bindTransactionForm();
-    function bindTransactionForm() {
-      document.getElementById('transactionForm').addEventListener('submit', async function (event) {
-        event.preventDefault();
-        var form = event.currentTarget;
-        var fd = new FormData(form);
-        var payer = String(fd.get('payer') || '').trim();
-        var payee = String(fd.get('payee') || '').trim();
-        var files = Array.from(form.elements.receipts ? form.elements.receipts.files : []);
-        var addedReceipts = [];
-        for (var i = 0; i < files.length; i += 1) addedReceipts.push(await compressImage(files[i]));
-        var record = {
-          id: editing ? tx.id : uid('tx'),
-          type: form.dataset.type,
-          date: fd.get('date'),
-          amount: Number(fd.get('amount') || 0),
-          category: fd.get('category'),
-          description: String(fd.get('description') || '').trim(),
-          payer: payer,
-          payee: payee,
-          paymentMethod: String(fd.get('paymentMethod') || ''),
-          reimbursementStatus: String(fd.get('reimbursementStatus') || ''),
-          note: String(fd.get('note') || '').trim(),
-          receipts: existingReceipts.concat(addedReceipts)
-        };
-        if (editing) Object.assign(tx, record); else project.transactions.push(record);
-        if (payer && project.contacts.payers.indexOf(payer) < 0) project.contacts.payers.push(payer);
-        if (payee && project.contacts.payees.indexOf(payee) < 0) project.contacts.payees.push(payee);
-        saveState();
-        closeModal();
-        render();
-        toast('账目已保存');
+      list.addEventListener('pointerdown', function (e) {
+        var handle = e.target.closest('[data-action="drag-person"]');
+        if (!handle) return;
+        e.preventDefault();
+        active = null;
+        pointerId = e.pointerId;
+        startY = e.clientY;
+        holdTimer = setTimeout(function () {
+          active = handle.closest('[data-person-row]');
+          active.classList.add('dragging');
+          try { handle.setPointerCapture(pointerId); } catch (ignore) {}
+          if (navigator.vibrate) navigator.vibrate(18);
+        }, 280);
       });
-    }
-    modalContent.addEventListener('click', function switchType(event) {
-      var btn = event.target.closest('[data-action="transaction-type"]');
-      if (!btn) return;
-      type = btn.dataset.type;
-      modalContent.innerHTML = '<div class="modal-body">' + formHtml(type) + '</div>';
-      bindTransactionForm();
-    }, { once: false });
-  }
-
-  function compressImage(file) {
-    return new Promise(function (resolve, reject) {
-      var reader = new FileReader();
-      reader.onload = function () {
-        var image = new Image();
-        image.onload = function () {
-          var max = 1400;
-          var scale = Math.min(1, max / Math.max(image.width, image.height));
-          var canvas = document.createElement('canvas');
-          canvas.width = Math.round(image.width * scale);
-          canvas.height = Math.round(image.height * scale);
-          canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', .72));
-        };
-        image.onerror = reject;
-        image.src = reader.result;
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+      list.addEventListener('pointermove', function (e) {
+        if (e.pointerId !== pointerId) return;
+        if (!active) { if (Math.abs(e.clientY - startY) > 9) stop(false); return; }
+        e.preventDefault();
+        var under = document.elementFromPoint(e.clientX, e.clientY), target = under && under.closest('[data-person-row]');
+        if (!target || target === active || target.parentNode !== list) return;
+        var rect = target.getBoundingClientRect();
+        list.insertBefore(active, e.clientY < rect.top + rect.height / 2 ? target : target.nextSibling);
+        moved = true;
+      });
+      list.addEventListener('pointerup', function () { stop(true); });
+      list.addEventListener('pointercancel', function () { stop(false); });
     });
   }
 
-  function openTaskForm(id, date, dept) {
-    var project = currentProject();
-    var task = project.tasks.find(function (t) { return t.id === id; });
-    openModal([
-      '<div class="modal-head"><h2>' + (task ? '编辑事务' : '添加事务') + '</h2><button class="close-btn" data-action="close-modal">×</button></div>',
-      '<form id="taskForm"><div class="form-grid">',
-      '<div class="field full"><label>事务</label><input name="title" required maxlength="80" value="' + esc(task ? task.title : '') + '" placeholder="例如：确认演员通告"></div>',
-      '<div class="field"><label>日期</label><input type="date" name="date" required value="' + esc(task ? task.date : (date || isoToday())) + '"></div>',
-      '<div class="field"><label>部门</label><select name="department">' + project.departments.map(function (d) { return '<option ' + ((task ? task.department : dept) === d ? 'selected' : '') + '>' + esc(d) + '</option>'; }).join('') + '</select></div>',
-      '<div class="field full"><label>状态</label><select name="status"><option value="todo" ' + (!task || task.status === 'todo' ? 'selected' : '') + '>待办</option><option value="done" ' + (task && task.status === 'done' ? 'selected' : '') + '>完成</option></select></div>',
-      '</div><div class="form-actions">' + (task ? '<button type="button" class="btn btn-danger" data-action="delete-task" data-id="' + task.id + '">删除</button>' : '') + '<button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" type="submit">保存事务</button></div></form>'
-    ].join(''));
-    document.getElementById('taskForm').addEventListener('submit', function (event) {
-      event.preventDefault();
-      var fd = new FormData(event.currentTarget);
-      var record = { id: task ? task.id : uid('task'), title: fd.get('title').trim(), date: fd.get('date'), department: fd.get('department'), status: fd.get('status') };
-      if (task) Object.assign(task, record); else project.tasks.push(record);
-      saveState();
-      closeModal();
-      render();
-      toast('事务已保存');
+  function reimbursementRows(p) { return expenses(p).filter(function (t) { return t.reimbursementStatus === state.reimbursementView; }).sort(function (a, b) { return (a.payer || '').localeCompare(b.payer || '', 'zh-CN') || a.date.localeCompare(b.date); }); }
+  function receiptThumbs(t) { if (!t.receipts || !t.receipts.length) return '<span class="muted">无</span>'; return '<div class="thumbs">' + t.receipts.slice(0, 3).map(function (src, i) { return '<button class="thumb" data-action="view-receipt" data-id="' + t.id + '" data-index="' + i + '"><img src="' + src + '" alt="票据缩略图"></button>'; }).join('') + '</div>'; }
+  function renderReimbursement(p) {
+    var rows = reimbursementRows(p), selected = state.selectedReimbursements, grouped = {}; rows.forEach(function (t) { var key = t.payer || '未填写付款人'; (grouped[key] || (grouped[key] = [])).push(t); });
+    var actions = state.reimbursementView === '待提交' ? '<button class="btn" data-action="select-all-reimbursements">全选</button><button class="btn btn-primary" data-action="mark-reimbursed">批量标记已报销</button>' : '<button class="btn" data-action="select-all-reimbursements">全选</button>'; actions += '<button class="btn" data-action="export-reimbursement-excel">导出 Excel</button><button class="btn" data-action="export-reimbursement-pdf">导出 PDF</button>';
+    return pageTitle(state.reimbursementView + '报销', '按付款人归组，可多选记录批量处理和生成报销单。', actions) + '<div class="selection-bar"><strong>已选择 ' + selected.filter(function (id) { return rows.some(function (t) { return t.id === id; }); }).length + ' 笔</strong><span>总计 ' + fmtMoney(rows.filter(function (t) { return selected.indexOf(t.id) >= 0; }).reduce(function (s, t) { return s + Number(t.amount || 0); }, 0)) + '</span></div>' + (rows.length ? Object.keys(grouped).map(function (payer) { var list = grouped[payer], total = list.reduce(function (s, t) { return s + Number(t.amount || 0); }, 0); return '<section class="card section reimbursement-group"><div class="section-head"><div><h2>' + esc(payer) + '</h2><span class="muted">' + list.length + ' 笔</span></div><strong>' + fmtMoney(total) + '</strong></div><div class="table-wrap"><table><thead><tr><th></th><th>序号</th><th>日期</th><th>用途</th><th>分类</th><th>单价</th><th>数量</th><th>总金额</th><th>票据</th></tr></thead><tbody>' + list.map(function (t, i) { return '<tr><td><input class="check" type="checkbox" data-action="select-reimbursement" data-id="' + t.id + '" ' + (selected.indexOf(t.id) >= 0 ? 'checked' : '') + '></td><td>' + (i + 1) + '</td><td>' + esc(t.date) + '</td><td><button class="text-btn" data-action="edit-transaction" data-id="' + t.id + '">' + esc(t.description || '未填写') + '</button></td><td>' + esc(t.category) + '</td><td>' + fmtMoney(t.unitPrice) + '</td><td>' + Number(t.quantity || 1) + '</td><td><strong>' + fmtMoney(t.amount) + '</strong></td><td>' + receiptThumbs(t) + '</td></tr>'; }).join('') + '</tbody></table></div></section>'; }).join('') : '<section class="card">' + empty('这里暂时没有记录', state.reimbursementView === '待提交' ? '在制片账目中将支出设为“待提交”，它会自动出现在这里。' : '批量完成报销后，记录会移到这里。', '') + '</section>');
+  }
+  function renderSettings(p) { var roleCount = p.departments.reduce(function (sum, dept) { return sum + ((p.departmentRoles[dept] || []).length); }, 0); return pageTitle('项目设置', '管理项目资料、预算分类、部门和数据。', '') + '<div class="settings-grid"><section class="card section"><div class="section-head"><h2>项目资料</h2><button class="btn" data-action="edit-project">编辑</button></div><div class="list"><div class="list-row"><span class="list-main"><span class="list-title">项目周期</span><span class="list-meta">' + fmtDate(p.startDate) + '—' + fmtDate(p.endDate) + '</span></span></div><div class="list-row"><span class="list-main"><span class="list-title">总预算</span><span class="list-meta">' + fmtMoney(p.totalBudget) + '</span></span></div><button class="btn" data-action="toggle-archive">' + (p.archived ? '取消归档' : '归档项目') + '</button></div></section><section class="card section"><div class="section-head"><h2>预算与分类</h2><button class="btn" data-action="edit-budgets">管理</button></div><p class="muted">共 ' + p.categories.length + ' 个支出分类。</p></section><section class="card section"><div class="section-head"><h2>统筹部门与岗位</h2><button class="btn" data-action="edit-departments">管理</button></div><p class="muted">' + p.departments.length + ' 个部门，' + roleCount + ' 个细分岗位。与剧组通讯录同步。</p></section><section class="card section"><div class="section-head"><h2>导出与备份</h2></div><div class="button-stack"><button class="btn" data-action="export-backup">导出数据备份</button><button class="btn" data-action="import-backup">导入数据备份</button></div></section><section class="card section danger-zone"><h2>删除项目</h2><p class="muted">删除后无法恢复，建议先导出备份。</p><button class="btn btn-danger" data-action="delete-project">删除这个项目</button></section></div>'; }
+
+  function newProjectRecord(data) { var roles = {}; DEFAULT_DEPARTMENTS.forEach(function (dept) { roles[dept] = (DEFAULT_DEPARTMENT_ROLES[dept] || []).slice(); }); return { id: uid('project'), name: data.name, startDate: data.startDate, endDate: data.endDate, totalBudget: Number(data.totalBudget || 0), archived: false, categorySchemaVersion: 1, departmentRoleSchemaVersion: 1, categories: DEFAULT_CATEGORIES.map(function (n) { return { id: uid('cat'), name: n, budget: 0 }; }), departments: DEFAULT_DEPARTMENTS.slice(), departmentRoles: roles, contacts: { payers: [], payees: [] }, transactions: [], tasks: [], timelineTasks: [], scenes: [], people: [], vehicles: [] }; }
+  function openProjectForm(p) {
+    openModal('<div class="modal-head"><h2>' + (p ? '编辑项目' : '新建短片项目') + '</h2><button class="close-btn" data-action="close-modal">×</button></div><form id="projectForm"><div class="form-grid"><div class="field full"><label>项目名称</label><input name="name" required maxlength="40" value="' + esc(p ? p.name : '') + '" placeholder="例如：毕业短片《海风》"></div><div class="field"><label>开始日期</label><input type="date" name="startDate" required value="' + esc(p ? p.startDate : isoToday()) + '"></div><div class="field"><label>结束日期</label><input type="date" name="endDate" required value="' + esc(p ? p.endDate : isoToday()) + '"></div><div class="field full"><label>总预算（元）</label><input type="number" name="totalBudget" min="0" step="0.01" value="' + esc(p ? p.totalBudget : '') + '"></div></div><div class="form-actions"><button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存项目</button></div></form>');
+    document.getElementById('projectForm').addEventListener('submit', function (e) { e.preventDefault(); var fd = new FormData(e.currentTarget), data = { name: fd.get('name').trim(), startDate: fd.get('startDate'), endDate: fd.get('endDate'), totalBudget: fd.get('totalBudget') }; if (p) Object.assign(p, data, { totalBudget: Number(data.totalBudget || 0) }); else { var created = newProjectRecord(data); state.projects.push(created); state.currentProjectId = created.id; state.screen = 'project'; state.module = null; } saveState(); closeModal(); render(); toast('项目已保存'); });
+  }
+  function openTransactionForm(id, presetType) {
+    var p = currentProject(), tx = p.transactions.find(function (t) { return t.id === id; }), editing = !!tx, type = tx ? tx.type : (presetType || 'expense'), existingReceipts = tx && tx.receipts ? tx.receipts : [];
+    syncPeoplePayees(p);
+    function html(selected) { var cats = selected === 'income' ? INCOME_CATEGORIES : p.categories.map(function (c) { return c.name; }); return '<div class="modal-head"><h2>' + (editing ? '编辑账目' : '记一笔') + '</h2><button class="close-btn" data-action="close-modal">×</button></div><div class="segmented"><button type="button" class="' + (selected === 'expense' ? 'active' : '') + '" data-action="transaction-type" data-type="expense">支出</button><button type="button" class="' + (selected === 'income' ? 'active' : '') + '" data-action="transaction-type" data-type="income">收入</button></div><form id="transactionForm" data-type="' + selected + '"><div class="form-grid"><div class="field"><label>日期</label><input type="date" name="date" required value="' + esc(tx ? tx.date : isoToday()) + '"></div><div class="field"><label>分类</label><select name="category">' + cats.map(function (x) { return '<option ' + (tx && tx.category === x ? 'selected' : '') + '>' + esc(x) + '</option>'; }).join('') + '</select></div><div class="field full"><label>用途／说明</label><input name="description" maxlength="80" value="' + esc(tx ? tx.description : '') + '" placeholder="例如：拍摄日盒饭"></div>' + (selected === 'expense' ? '<div class="field"><label>单价（元）</label><input type="number" name="unitPrice" min="0" step="0.01" required value="' + esc(tx ? tx.unitPrice : '') + '"></div><div class="field"><label>数量</label><input type="number" name="quantity" min="0.01" step="0.01" required value="' + esc(tx ? (tx.quantity || 1) : 1) + '"></div><div class="field full total-preview"><span>总金额</span><strong id="totalPreview">' + fmtMoney(tx ? tx.amount : 0) + '</strong></div><div class="field"><label>付款人</label><input name="payer" list="payerList" value="' + esc(tx ? tx.payer : '') + '" required placeholder="谁先垫付"><datalist id="payerList">' + p.contacts.payers.map(function (x) { return '<option>' + esc(x) + '</option>'; }).join('') + '</datalist></div><div class="field"><label>收款方</label><input name="payee" list="payeeList" value="' + esc(tx ? tx.payee : '') + '"><datalist id="payeeList">' + p.contacts.payees.map(function (x) { return '<option>' + esc(x) + '</option>'; }).join('') + '</datalist></div><div class="field full"><label>报销状态</label><select name="reimbursementStatus">' + REIMBURSEMENT.map(function (x) { return '<option ' + (tx && tx.reimbursementStatus === x ? 'selected' : '') + '>' + x + '</option>'; }).join('') + '</select></div><div class="field full"><label>票据照片（可多选）</label><input type="file" name="receipts" accept="image/*" multiple><div class="receipt-preview">' + existingReceipts.map(function (src) { return '<img src="' + src + '" alt="票据">'; }).join('') + '</div></div>' : '<div class="field full"><label>金额（元）</label><input type="number" name="amount" min="0" step="0.01" required value="' + esc(tx ? tx.amount : '') + '"></div>') + '<div class="field full"><label>备注</label><textarea name="note">' + esc(tx ? tx.note : '') + '</textarea></div></div><div class="form-actions">' + (editing ? '<button type="button" class="btn btn-danger" data-action="delete-transaction" data-id="' + tx.id + '">删除</button>' : '') + '<button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存账目</button></div></form>'; }
+    function bind() { var form = document.getElementById('transactionForm'); function updateTotal() { if (form.dataset.type === 'expense') document.getElementById('totalPreview').textContent = fmtMoney(Number(form.elements.unitPrice.value || 0) * Number(form.elements.quantity.value || 0)); } if (form.elements.unitPrice) { form.elements.unitPrice.addEventListener('input', updateTotal); form.elements.quantity.addEventListener('input', updateTotal); updateTotal(); } form.addEventListener('submit', async function (e) { e.preventDefault(); var fd = new FormData(form), files = Array.from(form.elements.receipts ? form.elements.receipts.files : []), added = []; for (var i = 0; i < files.length; i++) added.push(await compressImage(files[i])); var unit = Number(fd.get('unitPrice') || 0), qty = Number(fd.get('quantity') || 1), payer = String(fd.get('payer') || '').trim(), payee = String(fd.get('payee') || '').trim(); var record = { id: editing ? tx.id : uid('tx'), type: form.dataset.type, date: fd.get('date'), category: fd.get('category'), description: String(fd.get('description') || '').trim(), unitPrice: unit, quantity: qty, amount: form.dataset.type === 'expense' ? unit * qty : Number(fd.get('amount') || 0), payer: payer, payee: payee, reimbursementStatus: form.dataset.type === 'expense' ? fd.get('reimbursementStatus') : '', note: String(fd.get('note') || '').trim(), receipts: existingReceipts.concat(added), reimbursedAt: tx ? tx.reimbursedAt || '' : '' }; if (editing) Object.assign(tx, record); else p.transactions.push(record); if (payer && p.contacts.payers.indexOf(payer) < 0) p.contacts.payers.push(payer); if (payee && p.contacts.payees.indexOf(payee) < 0) p.contacts.payees.push(payee); saveState(); closeModal(); render(); toast('账目已保存'); }); }
+    openModal(html(type)); bind(); modalContent.onclick = function (e) { var b = e.target.closest('[data-action="transaction-type"]'); if (!b) return; type = b.dataset.type; modalContent.innerHTML = '<div class="modal-body">' + html(type) + '</div>'; bind(); };
+  }
+  function compressImage(file) { return new Promise(function (resolve, reject) { var r = new FileReader(); r.onload = function () { var im = new Image(); im.onload = function () { var max = 1200, scale = Math.min(1, max / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = Math.round(im.width * scale); c.height = Math.round(im.height * scale); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); resolve(c.toDataURL('image/jpeg', .68)); }; im.onerror = reject; im.src = r.result; }; r.onerror = reject; r.readAsDataURL(file); }); }
+  function openTaskForm(id, date, dept) { var p = currentProject(), t = p.tasks.find(function (x) { return x.id === id; }), color = taskColor(t && t.color), swatches = TASK_COLORS.map(function (c) { return '<button type="button" class="color-swatch ' + (c.toLowerCase() === color.toLowerCase() ? 'active' : '') + '" data-task-color="' + c + '" style="--swatch:' + c + '" aria-label="选择颜色 ' + c + '"></button>'; }).join(''); openModal('<div class="modal-head"><h2>' + (t ? '编辑事务' : '添加事务') + '</h2><button class="close-btn" data-action="close-modal">×</button></div><form id="taskForm"><div class="form-grid"><div class="field full"><label>事务</label><input name="title" required maxlength="80" value="' + esc(t ? t.title : '') + '"></div><div class="field"><label>日期</label><input type="date" name="date" required value="' + esc(t ? t.date : (date || isoToday())) + '"></div><div class="field"><label>部门</label><select name="department">' + p.departments.map(function (x) { return '<option ' + ((t ? t.department : dept) === x ? 'selected' : '') + '>' + esc(x) + '</option>'; }).join('') + '</select></div><div class="field"><label>状态</label><select name="status"><option value="todo" ' + (!t || t.status === 'todo' ? 'selected' : '') + '>待办</option><option value="done" ' + (t && t.status === 'done' ? 'selected' : '') + '>完成</option></select></div><div class="field full"><label>事务颜色</label><div class="task-color-control"><div class="color-presets" role="group" aria-label="常用颜色">' + swatches + '</div><label class="custom-color"><input type="color" name="color" value="' + color + '" aria-label="自定义事务颜色"><span>自定义</span></label><span id="taskColorPreview" class="task-color-preview" style="--task-color:' + color + '">预览</span></div></div></div><div class="form-actions">' + (t ? '<button type="button" class="btn btn-danger" data-action="delete-task" data-id="' + t.id + '">删除</button>' : '') + '<button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存</button></div></form>'); var taskForm = document.getElementById('taskForm'), colorInput = taskForm.elements.color, preview = document.getElementById('taskColorPreview'), colorButtons = Array.from(taskForm.querySelectorAll('[data-task-color]')); function applyColor(value) { var selected = taskColor(value); colorInput.value = selected; preview.style.setProperty('--task-color', selected); colorButtons.forEach(function (button) { button.classList.toggle('active', button.dataset.taskColor.toLowerCase() === selected.toLowerCase()); }); } colorButtons.forEach(function (button) { button.addEventListener('click', function () { applyColor(button.dataset.taskColor); }); }); colorInput.addEventListener('input', function () { applyColor(colorInput.value); }); taskForm.addEventListener('submit', function (e) { e.preventDefault(); var fd = new FormData(e.currentTarget), r = { id: t ? t.id : uid('task'), title: fd.get('title').trim(), date: fd.get('date'), department: fd.get('department'), status: fd.get('status'), color: taskColor(fd.get('color')) }; if (t) Object.assign(t, r); else p.tasks.push(r); saveState(); closeModal(); render(); }); }
+  function openTimelineTaskForm(id, date) { var p = currentProject(), t = (p.timelineTasks || []).find(function (x) { return x.id === id; }), color = taskColor(t && t.color), swatches = TASK_COLORS.map(function (c) { return '<button type="button" class="color-swatch ' + (c.toLowerCase() === color.toLowerCase() ? 'active' : '') + '" data-task-color="' + c + '" style="--swatch:' + c + '" aria-label="选择颜色 ' + c + '"></button>'; }).join(''); openModal('<div class="modal-head"><h2>' + (t ? '编辑总表事务' : '添加总表事务') + '</h2><button class="close-btn" data-action="close-modal">×</button></div><form id="timelineTaskForm"><div class="form-grid"><div class="field full"><label>事务</label><input name="title" required maxlength="80" value="' + esc(t ? t.title : '') + '"></div><div class="field"><label>日期</label><input type="date" name="date" required value="' + esc(t ? t.date : (date || isoToday())) + '"></div><div class="field"><label>状态</label><select name="status"><option value="todo" ' + (!t || t.status === 'todo' ? 'selected' : '') + '>待办</option><option value="done" ' + (t && t.status === 'done' ? 'selected' : '') + '>完成</option></select></div><div class="field full"><label>事务颜色</label><div class="task-color-control"><div class="color-presets" role="group" aria-label="常用颜色">' + swatches + '</div><label class="custom-color"><input type="color" name="color" value="' + color + '" aria-label="自定义事务颜色"><span>自定义</span></label><span id="timelineColorPreview" class="task-color-preview" style="--task-color:' + color + '">预览</span></div></div>' + (t && t.sourceTaskId ? '<p class="field full import-note">此事务从周事务导入，修改后不会影响原事务。</p>' : '') + '</div><div class="form-actions">' + (t ? '<button type="button" class="btn btn-danger" data-action="delete-timeline-task" data-id="' + t.id + '">删除</button>' : '') + '<button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存</button></div></form>'); var form = document.getElementById('timelineTaskForm'), colorInput = form.elements.color, preview = document.getElementById('timelineColorPreview'), buttons = Array.from(form.querySelectorAll('[data-task-color]')); function applyColor(value) { var selected = taskColor(value); colorInput.value = selected; preview.style.setProperty('--task-color', selected); buttons.forEach(function (button) { button.classList.toggle('active', button.dataset.taskColor.toLowerCase() === selected.toLowerCase()); }); } buttons.forEach(function (button) { button.addEventListener('click', function () { applyColor(button.dataset.taskColor); }); }); colorInput.addEventListener('input', function () { applyColor(colorInput.value); }); form.addEventListener('submit', function (e) { e.preventDefault(); var fd = new FormData(e.currentTarget), record = { id: t ? t.id : uid('timeline'), title: fd.get('title').trim(), date: fd.get('date'), status: fd.get('status'), color: taskColor(fd.get('color')), sourceTaskId: t ? t.sourceTaskId || '' : '' }; if (t) Object.assign(t, record); else p.timelineTasks.push(record); saveState(); closeModal(); render(); toast('时间总表已保存'); }); }
+  function openTimelineImport() { var p = currentProject(), imported = {}; (p.timelineTasks || []).forEach(function (t) { if (t.sourceTaskId) imported[t.sourceTaskId] = true; }); var tasks = p.tasks.slice().sort(function (a, b) { return a.date.localeCompare(b.date) || a.department.localeCompare(b.department); }), choices = tasks.length ? tasks.map(function (t) { var used = imported[t.id]; return '<label class="choice import-choice ' + (used ? 'already-imported' : '') + '"><input type="checkbox" name="taskIds" value="' + t.id + '" ' + (used ? 'disabled' : '') + '><span><strong>' + esc(t.title) + '</strong><small>' + fmtDate(t.date, true) + ' · ' + esc(t.department) + (used ? ' · 已导入' : '') + '</small></span></label>'; }).join('') : '<p class="muted">周事务中还没有可选事务。</p>'; openModal('<div class="modal-head"><div><h2>从周事务选择</h2><p class="muted budget-hint">导入后是独立副本，不会与周事务同步。</p></div><button class="close-btn" data-action="close-modal">×</button></div><form id="timelineImportForm"><div class="choice-box import-list">' + choices + '</div><div class="form-actions"><button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" ' + (tasks.length ? '' : 'disabled') + '>导入所选</button></div></form>', true); document.getElementById('timelineImportForm').addEventListener('submit', function (e) { e.preventDefault(); var ids = new FormData(e.currentTarget).getAll('taskIds'); if (!ids.length) { toast('请先选择周事务'); return; } ids.forEach(function (id) { var source = p.tasks.find(function (t) { return t.id === id; }); if (source && !imported[id]) p.timelineTasks.push({ id: uid('timeline'), title: source.title, date: source.date, status: source.status, color: taskColor(source.color), sourceTaskId: source.id }); }); saveState(); closeModal(); render(); toast('已导入 ' + ids.length + ' 条事务'); }); }
+  function openSceneForm(id) {
+    var p = currentProject(), s = p.scenes.find(function (x) { return x.id === id; });
+    var actors = p.people.filter(function (person) { return person.department === '演员组'; });
+    var currentCast = String(s && s.cast || '').split(/[、,，/]+/).map(function (value) { return value.trim(); }).filter(Boolean);
+    var actorValues = actors.map(function (actor) { return actor.character || actor.name; });
+    var extraCast = currentCast.filter(function (value) { return actorValues.indexOf(value) < 0; });
+    var actorChoices = actors.length ? actors.map(function (actor) { var value = actor.character || actor.name; return '<label class="actor-choice"><input type="checkbox" name="castPeople" value="' + esc(value) + '" ' + (currentCast.indexOf(value) >= 0 ? 'checked' : '') + '><span><strong>' + esc(value) + '</strong><small>演员：' + esc(actor.name) + (actor.character ? '' : ' · 未填角色') + '</small></span></label>'; }).join('') : '<p class="muted">演员组暂无人员，可先在剧组通讯录中添加。</p>';
+    function field(label, name, value, full) { return '<div class="field ' + (full ? 'full' : '') + '"><label>' + label + '</label><input name="' + name + '" value="' + esc(value || '') + '"></div>'; }
+    var castField = '<div class="field full"><label>人物</label><div class="actor-picker">' + actorChoices + '</div><input name="castExtra" value="' + esc(extraCast.join('、')) + '" placeholder="其他人物，可用顿号分隔"><small class="field-help">来自剧组通讯录的演员组，可多选。</small></div>';
+    openModal('<div class="modal-head"><h2>' + (s ? '编辑场次' : '添加场次') + '</h2><button class="close-btn" data-action="close-modal">×</button></div><form id="sceneForm"><div class="form-grid">' + field('具体拍摄地', 'location', s && s.location, true) + field('场号', 'sceneNo', s && s.sceneNo) + field('场景', 'sceneName', s && s.sceneName) + '<div class="field"><label>日／夜</label><select name="dayNight"><option ' + (s && s.dayNight === '日' ? 'selected' : '') + '>日</option><option ' + (s && s.dayNight === '夜' ? 'selected' : '') + '>夜</option></select></div><div class="field"><label>内／外</label><select name="interiorExterior"><option ' + (s && s.interiorExterior === '内' ? 'selected' : '') + '>内</option><option ' + (s && s.interiorExterior === '外' ? 'selected' : '') + '>外</option></select></div>' + field('镜头数量', 'shotCount', s && s.shotCount) + field('预计拍摄时长', 'duration', s && s.duration) + castField + field('道具', 'props', s && s.props) + field('陈设', 'setDress', s && s.setDress) + field('服装', 'costume', s && s.costume) + field('化妆', 'makeup', s && s.makeup) + '<div class="field"><label>拍摄状态</label><select name="status">' + SCENE_STATUSES.map(function (x) { return '<option ' + (s && s.status === x ? 'selected' : '') + '>' + x + '</option>'; }).join('') + '</select></div><div class="field full"><label>剧情摘要</label><textarea name="summary">' + esc(s && s.summary) + '</textarea></div><div class="field full"><label>备注</label><textarea name="note">' + esc(s && s.note) + '</textarea></div></div><div class="form-actions">' + (s ? '<button type="button" class="btn btn-danger" data-action="delete-scene" data-id="' + s.id + '">删除</button>' : '') + '<button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存场次</button></div></form>', true);
+    document.getElementById('sceneForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var fd = new FormData(e.currentTarget), cast = fd.getAll('castPeople').concat(String(fd.get('castExtra') || '').split(/[、,，/]+/)).map(function (value) { return value.trim(); }).filter(Boolean).filter(function (value, index, all) { return all.indexOf(value) === index; });
+      var r = { id: s ? s.id : uid('scene'), location: fd.get('location').trim(), sceneNo: fd.get('sceneNo').trim(), sceneName: fd.get('sceneName').trim(), dayNight: fd.get('dayNight'), interiorExterior: fd.get('interiorExterior'), shotCount: fd.get('shotCount').trim(), duration: fd.get('duration').trim(), cast: cast.join('、'), props: fd.get('props').trim(), setDress: fd.get('setDress').trim(), costume: fd.get('costume').trim(), makeup: fd.get('makeup').trim(), status: fd.get('status'), summary: fd.get('summary').trim(), note: fd.get('note').trim() };
+      if (s) Object.assign(s, r); else p.scenes.push(r);
+      saveState(); closeModal(); render();
     });
   }
-
-  function openBudgetEditor() {
-    var project = currentProject();
-    function rows() {
-      return project.categories.map(function (c) {
-        return '<div class="budget-line" data-category-row data-id="' + c.id + '"><input class="input category-name" value="' + esc(c.name) + '"><input class="input category-budget" type="number" min="0" step="0.01" value="' + Number(c.budget || 0) + '" placeholder="预算"><button type="button" class="btn icon-btn btn-danger" data-action="remove-category">×</button></div>';
-      }).join('');
-    }
-    openModal('<div class="modal-head"><h2>分类预算</h2><button class="close-btn" data-action="close-modal">×</button></div><form id="budgetForm"><div class="budget-editor" id="budgetRows">' + rows() + '</div><button type="button" class="btn" style="margin-top:12px" data-action="add-category">＋ 添加分类</button><div class="form-actions"><button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" type="submit">保存分类预算</button></div></form>');
-    document.getElementById('budgetForm').addEventListener('submit', function (event) {
-      event.preventDefault();
-      project.categories = Array.from(document.querySelectorAll('[data-category-row]')).map(function (row) {
-        return { id: row.dataset.id || uid('cat'), name: row.querySelector('.category-name').value.trim(), budget: Number(row.querySelector('.category-budget').value || 0) };
-      }).filter(function (c) { return c.name; });
-      saveState();
-      closeModal();
-      render();
-      toast('分类预算已更新');
-    });
+  function openPersonForm(id) {
+    var p = currentProject(), x = p.people.find(function (v) { return v.id === id; }), departments = p.departments.slice();
+    if (x && x.department && departments.indexOf(x.department) < 0) departments.push(x.department);
+    openModal('<div class="modal-head"><h2>' + (x ? '编辑人员' : '添加人员') + '</h2><button class="close-btn" data-action="close-modal">×</button></div><form id="personForm"><div class="form-grid"><div class="field"><label>姓名</label><input name="name" required value="' + esc(x && x.name) + '"></div><div class="field"><label>部门</label><select name="department">' + departments.map(function (d) { return '<option ' + (x && x.department === d ? 'selected' : '') + '>' + esc(d) + '</option>'; }).join('') + '</select></div><div class="field"><label>细分岗位</label><input name="role" list="roleList" value="' + esc(x && x.role) + '" placeholder="选择或输入岗位"><datalist id="roleList"></datalist></div><div class="field" id="characterField"><label>角色</label><input name="character" value="' + esc(x && x.character) + '" placeholder="例如：小夏"></div><div class="field"><label>手机号</label><input type="tel" name="phone" value="' + esc(x && x.phone) + '"></div></div><div class="form-actions">' + (x ? '<button type="button" class="btn btn-danger" data-action="delete-person" data-id="' + x.id + '">删除</button>' : '') + '<button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存</button></div></form>');
+    var form = document.getElementById('personForm'), department = form.elements.department, roleList = document.getElementById('roleList'), characterField = document.getElementById('characterField');
+    function updateDepartmentFields() { roleList.innerHTML = (p.departmentRoles[department.value] || []).map(function (role) { return '<option value="' + esc(role) + '"></option>'; }).join(''); characterField.hidden = department.value !== '演员组'; }
+    department.addEventListener('change', updateDepartmentFields); updateDepartmentFields();
+    form.addEventListener('submit', function (e) { e.preventDefault(); var fd = new FormData(e.currentTarget), r = { id: x ? x.id : uid('person'), name: fd.get('name').trim(), department: fd.get('department'), role: fd.get('role').trim(), character: fd.get('department') === '演员组' ? fd.get('character').trim() : '', phone: fd.get('phone').trim() }; if (x) Object.assign(x, r); else p.people.push(r); p.departmentRoles[r.department] = p.departmentRoles[r.department] || []; if (r.role && p.departmentRoles[r.department].indexOf(r.role) < 0) p.departmentRoles[r.department].push(r.role); syncPeoplePayees(p); saveState(); closeModal(); render(); toast('通讯录已同步'); });
   }
+  function openVehicleForm(id) { var p = currentProject(), v = p.vehicles.find(function (x) { return x.id === id; }); openModal('<div class="modal-head"><h2>' + (v ? '编辑车辆' : '添加车辆') + '</h2><button class="close-btn" data-action="close-modal">×</button></div><form id="vehicleForm"><div class="form-grid"><div class="field"><label>车辆／车牌</label><input name="name" required value="' + esc(v && v.name) + '"></div><div class="field"><label>司机</label><input name="driver" required value="' + esc(v && v.driver) + '"></div><div class="field"><label>司机电话</label><input type="tel" name="phone" value="' + esc(v && v.phone) + '"></div><div class="field"><label>出发时间</label><input type="time" name="departTime" value="' + esc(v && v.departTime) + '"></div><div class="field full"><label>集合地点</label><input name="meetingPoint" value="' + esc(v && v.meetingPoint) + '"></div><div class="field full"><label>乘车人员</label><textarea name="passengers">' + esc(v && v.passengers) + '</textarea></div></div><div class="form-actions">' + (v ? '<button type="button" class="btn btn-danger" data-action="delete-vehicle" data-id="' + v.id + '">删除</button>' : '') + '<button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存</button></div></form>'); document.getElementById('vehicleForm').addEventListener('submit', function (e) { e.preventDefault(); var fd = new FormData(e.currentTarget), r = { id: v ? v.id : uid('vehicle'), name: fd.get('name').trim(), driver: fd.get('driver').trim(), phone: fd.get('phone').trim(), departTime: fd.get('departTime'), meetingPoint: fd.get('meetingPoint').trim(), passengers: fd.get('passengers').trim() }; if (v) Object.assign(v, r); else p.vehicles.push(r); saveState(); closeModal(); render(); }); }
+  function openBudgetEditor() { var p = currentProject(); openModal('<div class="modal-head"><div><h2>分类预算</h2><p class="muted budget-hint">长按左侧手柄，上下拖动调整顺序</p></div><button class="close-btn" data-action="close-modal">×</button></div><form id="budgetForm"><div id="budgetRows" class="budget-editor">' + p.categories.map(budgetLine).join('') + '</div><button type="button" class="btn" data-action="add-category">＋ 添加分类</button><div class="form-actions"><button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存</button></div></form>'); enableBudgetSort(); document.getElementById('budgetForm').addEventListener('submit', function (e) { e.preventDefault(); p.categories = Array.from(document.querySelectorAll('[data-category-row]')).map(function (r) { return { id: r.dataset.id || uid('cat'), name: r.querySelector('.category-name').value.trim(), budget: Number(r.querySelector('.category-budget').value || 0) }; }).filter(function (x) { return x.name; }); saveState(); closeModal(); render(); }); }
+  function budgetLine(c) { return '<div class="budget-line" data-category-row data-id="' + (c.id || '') + '"><button type="button" class="drag-handle" data-action="drag-category" aria-label="长按拖动分类排序" title="长按拖动排序">⠿</button><input class="input category-name" value="' + esc(c.name || '') + '" placeholder="分类名称"><input class="input category-budget" type="number" min="0" step="0.01" value="' + Number(c.budget || 0) + '" placeholder="预算"><button type="button" class="btn icon-btn btn-danger" data-action="remove-category" aria-label="删除分类">×</button></div>'; }
+  function enableBudgetSort() { var list = document.getElementById('budgetRows'), active = null, holdTimer = null, pointerId = null, startY = 0; if (!list) return; function stop() { clearTimeout(holdTimer); holdTimer = null; if (active) active.classList.remove('dragging'); active = null; pointerId = null; } list.addEventListener('pointerdown', function (e) { var handle = e.target.closest('[data-action="drag-category"]'); if (!handle) return; e.preventDefault(); active = null; pointerId = e.pointerId; startY = e.clientY; holdTimer = setTimeout(function () { active = handle.closest('[data-category-row]'); active.classList.add('dragging'); try { handle.setPointerCapture(pointerId); } catch (ignore) {} if (navigator.vibrate) navigator.vibrate(18); }, 280); }); list.addEventListener('pointermove', function (e) { if (e.pointerId !== pointerId) return; if (!active) { if (Math.abs(e.clientY - startY) > 9) stop(); return; } e.preventDefault(); var body = list.closest('.modal-body'), bodyRect = body && body.getBoundingClientRect(); if (bodyRect) { if (e.clientY < bodyRect.top + 70) body.scrollTop -= 14; else if (e.clientY > bodyRect.bottom - 85) body.scrollTop += 14; } var under = document.elementFromPoint(e.clientX, e.clientY), target = under && under.closest('[data-category-row]'); if (!target || target === active || target.parentNode !== list) return; var rect = target.getBoundingClientRect(); list.insertBefore(active, e.clientY < rect.top + rect.height / 2 ? target : target.nextSibling); }); list.addEventListener('pointerup', stop); list.addEventListener('pointercancel', stop); }
+  function departmentEditorRow(dept, roles) { return '<section class="department-editor-row" data-department-row data-original="' + esc(dept || '') + '"><div class="department-editor-head"><div class="field"><label>部门名称</label><input class="department-name" value="' + esc(dept || '') + '" placeholder="例如：摄影组"></div><button type="button" class="btn btn-danger" data-action="remove-department">删除部门</button></div><div class="field"><label>细分岗位／分类（每行一个）</label><textarea class="department-roles" placeholder="例如：\n摄影指导\n摄影师\n摄影助理">' + esc((roles || []).join('\n')) + '</textarea></div></section>'; }
+  function openDepartmentEditor() { var p = currentProject(); openModal('<div class="modal-head"><div><h2>统筹部门与岗位</h2><p class="muted budget-hint">岗位会同步到剧组通讯录中的“细分岗位”。</p></div><button class="close-btn" data-action="close-modal">×</button></div><form id="deptForm"><div id="departmentRows" class="department-editor">' + p.departments.map(function (dept) { return departmentEditorRow(dept, p.departmentRoles[dept] || []); }).join('') + '</div><button type="button" class="btn" data-action="add-department">＋ 添加部门</button><div class="form-actions"><button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary">保存</button></div></form>', true); document.getElementById('deptForm').addEventListener('submit', function (e) { e.preventDefault(); var rows = Array.from(document.querySelectorAll('[data-department-row]')), names = [], roles = {}, renames = {}, duplicate = false; rows.forEach(function (row) { var name = row.querySelector('.department-name').value.trim(), original = row.dataset.original, list = row.querySelector('.department-roles').value.split(/[\n,，]+/).map(function (v) { return v.trim(); }).filter(Boolean).filter(function (v, i, all) { return all.indexOf(v) === i; }); if (!name) return; if (names.indexOf(name) >= 0) { duplicate = true; return; } names.push(name); roles[name] = list; if (original && original !== name) renames[original] = name; }); if (duplicate) { toast('部门名称不能重复'); return; } if (!names.length) { toast('至少保留一个部门'); return; } p.departments = names; p.departmentRoles = roles; p.people.forEach(function (person) { if (renames[person.department]) person.department = renames[person.department]; }); p.tasks.forEach(function (task) { if (renames[task.department]) task.department = renames[task.department]; }); saveState(); closeModal(); render(); toast('部门、岗位与通讯录已同步'); }); }
 
-  function openListEditor(kind) {
-    var project = currentProject();
-    var isDept = kind === 'departments';
-    var list = isDept ? project.departments : [];
-    var payers = project.contacts.payers.slice();
-    var payees = project.contacts.payees.slice();
-    var html = '<div class="modal-head"><h2>' + (isDept ? '计划部门' : '常用人员') + '</h2><button class="close-btn" data-action="close-modal">×</button></div><form id="listForm">';
-    if (isDept) {
-      html += '<div class="field"><label>每行一个部门</label><textarea name="departments" style="min-height:260px">' + esc(list.join('\n')) + '</textarea></div>';
-    } else {
-      html += '<div class="form-grid"><div class="field"><label>付款人，每行一个</label><textarea name="payers" style="min-height:220px">' + esc(payers.join('\n')) + '</textarea></div><div class="field"><label>收款方，每行一个</label><textarea name="payees" style="min-height:220px">' + esc(payees.join('\n')) + '</textarea></div></div>';
-    }
-    html += '<div class="form-actions"><button type="button" class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" type="submit">保存</button></div></form>';
-    openModal(html);
-    document.getElementById('listForm').addEventListener('submit', function (event) {
-      event.preventDefault();
-      var fd = new FormData(event.currentTarget);
-      function lines(value) { return String(value || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean); }
-      if (isDept) project.departments = lines(fd.get('departments'));
-      else project.contacts = { payers: lines(fd.get('payers')), payees: lines(fd.get('payees')) };
-      saveState();
-      closeModal();
-      render();
-      toast('已更新');
-    });
-  }
+  function download(name, content, type) { var blob = new Blob([content], { type: type || 'text/plain;charset=utf-8' }), url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(function () { URL.revokeObjectURL(url); }, 1000); }
+  function exportHtmlExcel(name, title, body) { download(name + '.xls', '\ufeff<html><head><meta charset="utf-8"><style>table{border-collapse:collapse}th,td{border:1px solid #777;padding:6px}</style></head><body><h1>' + esc(title) + '</h1>' + body + '</body></html>', 'application/vnd.ms-excel;charset=utf-8'); toast('Excel 已导出'); }
+  function tableHtml(headers, rows) { return '<table><thead><tr>' + headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + r.map(function (v) { return '<td>' + esc(v == null ? '' : v) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>'; }
+  function openPrint(title, body) { var w = window.open('', '_blank'); if (!w) { toast('请允许浏览器打开打印窗口'); return; } w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>body{font-family:Arial,"PingFang SC",sans-serif;color:#17211c;padding:18px}h1{margin:0 0 6px;font-size:22px}h2{font-size:16px;margin:22px 0 8px}p{color:#526159}table{width:100%;border-collapse:collapse;margin:10px 0 20px}th,td{border:1px solid #9aa79f;padding:6px;font-size:11px;text-align:left;vertical-align:top}.meta{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}.box{border:1px solid #9aa79f;padding:8px}.sign{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-top:44px}.group{page-break-after:always}.group:last-child{page-break-after:auto}.thumb{width:54px;height:54px;object-fit:cover}.notice{white-space:pre-wrap}@page{size:A4 landscape;margin:10mm}</style></head><body>' + body + '</body></html>'); w.document.close(); setTimeout(function () { w.print(); }, 350); }
+  function productionRows(p) { return p.transactions.slice().sort(function (a, b) { return a.date.localeCompare(b.date); }).map(function (t) { return [t.date, t.type === 'income' ? '收入' : '支出', t.description, t.category, t.unitPrice || '', t.quantity || '', t.amount, t.payer || '', t.payee || '', t.reimbursementStatus || '', t.note || '']; }); }
+  function exportProduction(p, pdf) { var headers = ['日期', '类型', '用途', '分类', '单价', '数量', '总金额', '付款人', '收款方', '报销状态', '备注'], body = '<p>总预算：' + fmtMoney(p.totalBudget) + '　已花费：' + fmtMoney(projectSpent(p)) + '　剩余：' + fmtMoney(p.totalBudget - projectSpent(p)) + '</p>' + tableHtml(headers, productionRows(p)); if (pdf) openPrint(p.name + '-制片账目', '<h1>' + esc(p.name) + ' 制片账目</h1>' + body); else exportHtmlExcel(p.name + '-制片账目', p.name + ' 制片账目', body); }
+  function coordinationDataset(p, kind) { if (kind === 'week') return { title: '周事务表', headers: ['日期', '部门', '事务', '状态'], rows: p.tasks.slice().sort(function (a, b) { return a.date.localeCompare(b.date); }).map(function (t) { return [t.date, t.department, t.title, t.status === 'done' ? '完成' : '待办']; }) }; if (kind === 'timeline') return { title: '时间总表', headers: ['日期', '星期', '事务', '状态'], rows: (p.timelineTasks || []).slice().sort(function (a, b) { return a.date.localeCompare(b.date); }).map(function (t) { var d = new Date(t.date + 'T00:00:00'); return [t.date, '星期' + ['日', '一', '二', '三', '四', '五', '六'][d.getDay()], t.title, t.status === 'done' ? '完成' : '待办']; }) }; if (kind === 'scenes') return { title: '顺场表', headers: ['拍摄地', '场号', '场景', '日/夜', '内/外', '镜头数', '预计时长', '人物', '道具', '陈设', '服装', '化妆', '状态', '备注'], rows: p.scenes.map(sceneFields) }; return { title: '人员与车辆', headers: ['类型', '姓名/车辆', '部门/司机', '职务/集合点', '角色', '电话/出发时间', '乘员'], rows: p.people.map(function (x) { return ['人员', x.name, x.department, x.role, x.character || '', x.phone, '']; }).concat(p.vehicles.map(function (v) { return ['车辆', v.name, v.driver, v.meetingPoint, '', v.departTime, v.passengers]; })) }; }
+  function exportCoord(p, kind, pdf) { var d = coordinationDataset(p, kind), body = tableHtml(d.headers, d.rows); if (pdf) openPrint(p.name + '-' + d.title, '<h1>' + esc(p.name) + ' ' + d.title + '</h1>' + body); else exportHtmlExcel(p.name + '-' + d.title, p.name + ' ' + d.title, body); }
+  function selectedReimbursementRows(p) { return expenses(p).filter(function (t) { return state.selectedReimbursements.indexOf(t.id) >= 0 && t.reimbursementStatus === state.reimbursementView; }); }
+  function reimbursementBody(p, list, includeImages) { var grouped = {}; list.forEach(function (t) { var key = t.payer || '未填写付款人'; (grouped[key] || (grouped[key] = [])).push(t); }); return Object.keys(grouped).map(function (payer) { var rows = grouped[payer], total = rows.reduce(function (s, t) { return s + Number(t.amount || 0); }, 0); return '<section class="group"><h1>' + esc(p.name) + ' 报销单</h1><p>报销人：' + esc(payer) + '　状态：' + esc(state.reimbursementView) + '</p><table><thead><tr><th>序号</th><th>日期</th><th>用途</th><th>分类</th><th>单价</th><th>数量</th><th>总金额</th>' + (includeImages ? '<th>票据</th>' : '') + '</tr></thead><tbody>' + rows.map(function (t, i) { return '<tr><td>' + (i + 1) + '</td><td>' + esc(t.date) + '</td><td>' + esc(t.description) + '</td><td>' + esc(t.category) + '</td><td>' + fmtMoney(t.unitPrice) + '</td><td>' + Number(t.quantity || 1) + '</td><td>' + fmtMoney(t.amount) + '</td>' + (includeImages ? '<td>' + ((t.receipts || []).map(function (src) { return '<img class="thumb" src="' + src + '">'; }).join('') || '无') + '</td>' : '') + '</tr>'; }).join('') + '<tr><td colspan="6"><strong>合计</strong></td><td><strong>' + fmtMoney(total) + '</strong></td>' + (includeImages ? '<td></td>' : '') + '</tr></tbody></table><div class="sign"><span>报销人：________</span><span>制片主任：________</span><span>审批人：________</span><span>日期：________</span></div></section>'; }).join(''); }
+  function exportReimbursement(p, pdf) { var rows = selectedReimbursementRows(p); if (!rows.length) { toast('请先勾选要导出的报销记录'); return; } if (pdf) openPrint(p.name + '-报销单', reimbursementBody(p, rows, true)); else exportHtmlExcel(p.name + '-报销单-' + isoToday(), p.name + ' 报销单', reimbursementBody(p, rows, false)); }
 
-  function download(name, content, type) {
-    var blob = new Blob([content], { type: type || 'text/plain;charset=utf-8' });
-    var url = URL.createObjectURL(blob);
-    var link = document.createElement('a');
-    link.href = url;
-    link.download = name;
-    link.click();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-  }
-
-  function exportExcel(project) {
-    var txRows = project.transactions.slice().sort(function (a, b) { return a.date.localeCompare(b.date); }).map(function (t) {
-      return '<tr><td>' + esc(t.date) + '</td><td>' + (t.type === 'income' ? '收入' : '支出') + '</td><td>' + esc(t.category) + '</td><td>' + esc(t.description) + '</td><td>' + Number(t.amount || 0) + '</td><td>' + esc(t.payer) + '</td><td>' + esc(t.payee) + '</td><td>' + esc(t.paymentMethod) + '</td><td>' + esc(t.reimbursementStatus) + '</td><td>' + esc(t.note) + '</td></tr>';
-    }).join('');
-    var budgetRows = project.categories.map(function (c) {
-      var spent = categorySpent(project, c.name);
-      return '<tr><td>' + esc(c.name) + '</td><td>' + Number(c.budget || 0) + '</td><td>' + spent + '</td><td>' + (Number(c.budget || 0) - spent) + '</td></tr>';
-    }).join('');
-    var settlement = settlementRows(project).map(function (r) {
-      return '<tr><td>' + esc(r.name) + '</td><td>' + r.total + '</td><td>' + r.pending + '</td><td>' + r.reimbursed + '</td></tr>';
-    }).join('');
-    var html = '\ufeff<html><head><meta charset="utf-8"></head><body><h1>' + esc(project.name) + ' 制片结算表</h1><p>总预算：' + project.totalBudget + '　已花费：' + projectSpent(project) + '　剩余预算：' + (project.totalBudget - projectSpent(project)) + '</p><h2>分类预算</h2><table border="1"><tr><th>分类</th><th>预算</th><th>实际花费</th><th>剩余</th></tr>' + budgetRows + '</table><h2>付款人结算</h2><table border="1"><tr><th>付款人</th><th>垫付总额</th><th>待报销</th><th>已报销</th></tr>' + settlement + '</table><h2>账目明细</h2><table border="1"><tr><th>日期</th><th>类型</th><th>分类</th><th>说明</th><th>金额</th><th>付款人</th><th>收款方</th><th>支付方式</th><th>报销状态</th><th>备注</th></tr>' + txRows + '</table></body></html>';
-    download(project.name + '-制片结算表.xls', html, 'application/vnd.ms-excel;charset=utf-8');
-    toast('Excel 已导出');
-  }
-
-  function exportPdf(project) {
-    var win = window.open('', '_blank');
-    if (!win) { toast('浏览器拦截了打印窗口，请允许弹窗'); return; }
-    var transactions = project.transactions.slice().sort(function (a, b) { return a.date.localeCompare(b.date); });
-    win.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(project.name) + ' 制片结算表</title><style>body{font-family:system-ui,sans-serif;color:#18221d;padding:24px}h1{margin:0 0 6px}p{color:#66736c}table{width:100%;border-collapse:collapse;margin:16px 0 28px}th,td{border:1px solid #ccd6d0;padding:7px;text-align:left;font-size:12px}.metrics{display:flex;gap:12px}.metric{border:1px solid #ccd6d0;padding:12px;min-width:140px}.metric b{display:block;font-size:20px;margin-top:5px}@page{size:A4;margin:14mm}</style></head><body><h1>' + esc(project.name) + ' 制片结算表</h1><p>' + fmtDate(project.startDate) + '—' + fmtDate(project.endDate) + '</p><div class="metrics"><div class="metric">总预算<b>' + fmtMoney(project.totalBudget) + '</b></div><div class="metric">已花费<b>' + fmtMoney(projectSpent(project)) + '</b></div><div class="metric">剩余预算<b>' + fmtMoney(project.totalBudget - projectSpent(project)) + '</b></div></div><h2>分类预算</h2><table><tr><th>分类</th><th>预算</th><th>实际花费</th><th>剩余</th></tr>' + project.categories.map(function (c) { var spent = categorySpent(project, c.name); return '<tr><td>' + esc(c.name) + '</td><td>' + fmtMoney(c.budget) + '</td><td>' + fmtMoney(spent) + '</td><td>' + fmtMoney(c.budget - spent) + '</td></tr>'; }).join('') + '</table><h2>付款人结算</h2><table><tr><th>付款人</th><th>垫付总额</th><th>待报销</th><th>已报销</th></tr>' + settlementRows(project).map(function (r) { return '<tr><td>' + esc(r.name) + '</td><td>' + fmtMoney(r.total) + '</td><td>' + fmtMoney(r.pending) + '</td><td>' + fmtMoney(r.reimbursed) + '</td></tr>'; }).join('') + '</table><h2>账目明细</h2><table><tr><th>日期</th><th>分类</th><th>说明</th><th>付款人</th><th>报销</th><th>金额</th></tr>' + transactions.map(function (t) { return '<tr><td>' + esc(t.date) + '</td><td>' + esc(t.category) + '</td><td>' + esc(t.description) + '</td><td>' + esc(t.payer || '—') + '</td><td>' + esc(t.reimbursementStatus || '—') + '</td><td>' + (t.type === 'income' ? '+' : '−') + fmtMoney(t.amount) + '</td></tr>'; }).join('') + '</table></body></html>');
-    win.document.close();
-    setTimeout(function () { win.print(); }, 350);
-  }
-
-  function checkTodayNotifications() {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    var today = isoToday();
-    var marker = 'crewLedgerNotified_' + today;
-    if (localStorage.getItem(marker)) return;
-    var tasks = [];
-    state.projects.filter(function (p) { return !p.archived; }).forEach(function (p) {
-      p.tasks.filter(function (t) { return t.date === today && t.status !== 'done'; }).forEach(function (t) { tasks.push(p.name + ' · ' + t.title); });
-    });
-    if (tasks.length) {
-      new Notification('片场账本：今天有 ' + tasks.length + ' 项待办', { body: tasks.slice(0, 3).join('\n'), icon: './icon.svg' });
-      localStorage.setItem(marker, '1');
-    }
-  }
-
-  document.addEventListener('click', function (event) {
-    var el = event.target.closest('[data-action]');
-    if (!el) return;
-    var action = el.dataset.action;
-    var project = currentProject();
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-action]'); if (!el) return; var action = el.dataset.action, p = currentProject();
     if (action === 'new-project') openProjectForm(null);
-    if (action === 'edit-project') openProjectForm(project);
-    if (action === 'open-project') { state.currentProjectId = el.dataset.id; state.screen = 'project'; state.tab = 'overview'; saveState(); render(); }
-    if (action === 'back-projects') { state.screen = 'projects'; saveState(); render(); }
-    if (action === 'tab') { state.tab = el.dataset.tab; saveState(); render(); }
+    if (action === 'edit-project') openProjectForm(p);
+    if (action === 'open-project') { state.currentProjectId = el.dataset.id; state.screen = 'project'; state.module = null; saveState(); render(); }
+    if (action === 'delete-project-list') { var listProject = state.projects.find(function (x) { return x.id === el.dataset.id; }); if (listProject && confirm('确定永久删除“' + listProject.name + '”吗？项目内的账目、计划和报销都将一并删除，且无法恢复。')) { state.projects = state.projects.filter(function (x) { return x.id !== listProject.id; }); if (state.currentProjectId === listProject.id) state.currentProjectId = null; saveState(); render(); toast('项目已删除'); } }
+    if (action === 'back') { if (state.module) state.module = null; else { state.screen = 'projects'; state.currentProjectId = null; } saveState(); render(); }
+    if (action === 'enter-module') { state.module = el.dataset.module; saveState(); render(); }
+    if (action === 'module-view') { if (state.module === 'production') state.productionView = el.dataset.view; else if (state.module === 'coordination') state.coordinationView = el.dataset.view; else state.reimbursementView = el.dataset.view; state.selectedReimbursements = []; saveState(); render(); }
     if (action === 'close-modal') closeModal();
     if (action === 'new-transaction') openTransactionForm(null, 'expense');
     if (action === 'edit-transaction') openTransactionForm(el.dataset.id);
-    if (action === 'delete-transaction') {
-      if (confirm('确定删除这笔账目吗？')) { project.transactions = project.transactions.filter(function (t) { return t.id !== el.dataset.id; }); saveState(); closeModal(); render(); toast('账目已删除'); }
-    }
+    if (action === 'delete-transaction' && confirm('确定删除这笔账目吗？')) { p.transactions = p.transactions.filter(function (x) { return x.id !== el.dataset.id; }); saveState(); closeModal(); render(); }
     if (action === 'new-task') openTaskForm(null);
     if (action === 'new-task-date') openTaskForm(null, el.dataset.date, el.dataset.dept);
     if (action === 'edit-task') openTaskForm(el.dataset.id);
-    if (action === 'delete-task') {
-      if (confirm('确定删除这条事务吗？')) { project.tasks = project.tasks.filter(function (t) { return t.id !== el.dataset.id; }); saveState(); closeModal(); render(); }
-    }
-    if (action === 'toggle-task') {
-      var task = project.tasks.find(function (t) { return t.id === el.dataset.id; });
-      if (task) { task.status = el.checked ? 'done' : 'todo'; saveState(); render(); }
-    }
-    if (action === 'week-prev' || action === 'week-next') {
-      var days = action === 'week-prev' ? -7 : 7;
-      state.weekStart = dateKey(addDays(new Date(state.weekStart + 'T00:00:00'), days));
-      saveState(); render();
-    }
-    if (action === 'schedule-mode') { state.scheduleMode = el.dataset.mode; saveState(); render(); }
+    if (action === 'delete-task' && confirm('确定删除这条事务吗？')) { p.tasks = p.tasks.filter(function (x) { return x.id !== el.dataset.id; }); saveState(); closeModal(); render(); }
+    if (action === 'toggle-task') { var task = p.tasks.find(function (x) { return x.id === el.dataset.id; }); if (task) { task.status = el.checked ? 'done' : 'todo'; saveState(); render(); } }
+    if (action === 'week-prev' || action === 'week-next') { state.weekStart = dateKey(addDays(new Date(state.weekStart + 'T00:00:00'), action === 'week-prev' ? -7 : 7)); saveState(); render(); }
+    if (action === 'new-timeline-task') openTimelineTaskForm(null);
+    if (action === 'new-timeline-task-date') openTimelineTaskForm(null, el.dataset.date);
+    if (action === 'edit-timeline-task') openTimelineTaskForm(el.dataset.id);
+    if (action === 'import-week-tasks') openTimelineImport();
+    if (action === 'delete-timeline-task' && confirm('确定删除这条时间总表事务吗？')) { p.timelineTasks = p.timelineTasks.filter(function (x) { return x.id !== el.dataset.id; }); saveState(); closeModal(); render(); }
+    if (action === 'scene-view') { state.sceneView = el.dataset.view; saveState(); render(); }
+    if (action === 'new-scene') openSceneForm(null);
+    if (action === 'edit-scene') openSceneForm(el.dataset.id);
+    if (action === 'delete-scene' && confirm('确定删除这个场次吗？')) { p.scenes = p.scenes.filter(function (x) { return x.id !== el.dataset.id; }); saveState(); closeModal(); render(); }
+    if (action === 'new-person') openPersonForm(null);
+    if (action === 'edit-person') openPersonForm(el.dataset.id);
+    if (action === 'delete-person' && confirm('确定删除这位人员吗？')) { var removedPerson = p.people.find(function (x) { return x.id === el.dataset.id; }); p.people = p.people.filter(function (x) { return x.id !== el.dataset.id; }); if (removedPerson && !p.people.some(function (x) { return x.name === removedPerson.name; }) && !p.transactions.some(function (t) { return t.payee === removedPerson.name; })) p.contacts.payees = p.contacts.payees.filter(function (name) { return name !== removedPerson.name; }); saveState(); closeModal(); render(); }
+    if (action === 'new-vehicle') openVehicleForm(null);
+    if (action === 'edit-vehicle') openVehicleForm(el.dataset.id);
+    if (action === 'delete-vehicle' && confirm('确定删除这辆车吗？')) { p.vehicles = p.vehicles.filter(function (x) { return x.id !== el.dataset.id; }); saveState(); closeModal(); render(); }
     if (action === 'edit-budgets') openBudgetEditor();
-    if (action === 'add-category') {
-      document.getElementById('budgetRows').insertAdjacentHTML('beforeend', '<div class="budget-line" data-category-row data-id=""><input class="input category-name" placeholder="分类名称"><input class="input category-budget" type="number" min="0" step="0.01" placeholder="预算"><button type="button" class="btn icon-btn btn-danger" data-action="remove-category">×</button></div>');
-    }
+    if (action === 'add-category') document.getElementById('budgetRows').insertAdjacentHTML('beforeend', budgetLine({ id: '', name: '', budget: 0 }));
     if (action === 'remove-category') el.closest('[data-category-row]').remove();
-    if (action === 'edit-departments') openListEditor('departments');
-    if (action === 'edit-contacts') openListEditor('contacts');
-    if (action === 'toggle-archive') { project.archived = !project.archived; saveState(); render(); toast(project.archived ? '项目已归档' : '项目已恢复'); }
-    if (action === 'delete-project') {
-      if (confirm('确定永久删除“' + project.name + '”吗？此操作无法恢复。')) { state.projects = state.projects.filter(function (p) { return p.id !== project.id; }); state.currentProjectId = null; state.screen = 'projects'; saveState(); render(); }
-    }
-    if (action === 'export-excel') exportExcel(project);
-    if (action === 'export-pdf') exportPdf(project);
-    if (action === 'export-backup') { download('片场账本-数据备份-' + isoToday() + '.json', JSON.stringify(state, null, 2), 'application/json'); toast('备份已导出'); }
+    if (action === 'edit-departments') openDepartmentEditor();
+    if (action === 'add-department') document.getElementById('departmentRows').insertAdjacentHTML('beforeend', departmentEditorRow('', []));
+    if (action === 'remove-department') { var deptRow = el.closest('[data-department-row]'), deptRows = document.querySelectorAll('[data-department-row]'); if (deptRows.length <= 1) toast('至少保留一个部门'); else deptRow.remove(); }
+    if (action === 'toggle-archive') { p.archived = !p.archived; saveState(); render(); }
+    if (action === 'delete-project' && confirm('确定永久删除“' + p.name + '”吗？')) { state.projects = state.projects.filter(function (x) { return x.id !== p.id; }); state.screen = 'projects'; state.currentProjectId = null; state.module = null; saveState(); render(); }
+    if (action === 'select-reimbursement') { if (el.checked && state.selectedReimbursements.indexOf(el.dataset.id) < 0) state.selectedReimbursements.push(el.dataset.id); if (!el.checked) state.selectedReimbursements = state.selectedReimbursements.filter(function (id) { return id !== el.dataset.id; }); saveState(); render(); }
+    if (action === 'select-all-reimbursements') { var ids = reimbursementRows(p).map(function (t) { return t.id; }), all = ids.every(function (id) { return state.selectedReimbursements.indexOf(id) >= 0; }); state.selectedReimbursements = all ? [] : ids; saveState(); render(); }
+    if (action === 'mark-reimbursed') { var chosen = selectedReimbursementRows(p); if (!chosen.length) toast('请先勾选报销记录'); else if (confirm('将已选择的 ' + chosen.length + ' 笔标记为已报销？')) { chosen.forEach(function (t) { t.reimbursementStatus = '已报销'; t.reimbursedAt = isoToday(); }); state.selectedReimbursements = []; saveState(); render(); toast('已完成报销'); } }
+    if (action === 'view-receipt') { var tx = p.transactions.find(function (t) { return t.id === el.dataset.id; }), src = tx && tx.receipts[Number(el.dataset.index)]; if (src) openModal('<div class="modal-head"><h2>票据照片</h2><button class="close-btn" data-action="close-modal">×</button></div><img class="receipt-large" src="' + src + '" alt="票据照片">', true); }
+    if (action === 'export-production-excel') exportProduction(p, false);
+    if (action === 'export-production-pdf') exportProduction(p, true);
+    if (action === 'export-coord-excel') exportCoord(p, el.dataset.kind, false);
+    if (action === 'export-coord-pdf') exportCoord(p, el.dataset.kind, true);
+    if (action === 'export-reimbursement-excel') exportReimbursement(p, false);
+    if (action === 'export-reimbursement-pdf') exportReimbursement(p, true);
+    if (action === 'export-backup') download('片场工作台-数据备份-' + isoToday() + '.json', JSON.stringify(state, null, 2), 'application/json');
     if (action === 'import-backup') importInput.click();
-    if (action === 'enable-notifications') {
-      if (!('Notification' in window)) toast('当前浏览器不支持通知');
-      else Notification.requestPermission().then(function (permission) { toast(permission === 'granted' ? '当天提醒已开启' : '未获得通知权限'); checkTodayNotifications(); });
-    }
   });
-
-  document.addEventListener('input', function (event) {
-    var filter = event.target.dataset.filter;
-    if (!filter) return;
-    state.ledgerFilters[filter] = event.target.value;
-    saveState();
-    if (event.target.tagName === 'INPUT') {
-      clearTimeout(render.filterTimer);
-      render.filterTimer = setTimeout(render, 250);
-    } else render();
-  });
-
-  importInput.addEventListener('change', function () {
-    var file = importInput.files[0];
-    if (!file) return;
-    var reader = new FileReader();
-    reader.onload = function () {
-      try {
-        var data = JSON.parse(reader.result);
-        if (!data || !Array.isArray(data.projects)) throw new Error('invalid');
-        if (confirm('导入会覆盖当前全部数据，确定继续吗？')) { state = Object.assign(newState(), data); saveState(); render(); toast('数据已导入'); }
-      } catch (error) { toast('备份文件无法识别'); }
-      importInput.value = '';
-    };
-    reader.readAsText(file);
-  });
-
-  modal.addEventListener('click', function (event) {
-    if (event.target === modal) closeModal();
-  });
-
+  document.addEventListener('input', function (e) { var f = e.target.dataset.filter; if (!f) return; state.ledgerFilters[f] = e.target.value; saveState(); if (e.target.tagName === 'INPUT') { clearTimeout(render.filterTimer); render.filterTimer = setTimeout(render, 220); } else render(); });
+  importInput.addEventListener('change', function () { var file = importInput.files[0]; if (!file) return; var r = new FileReader(); r.onload = function () { try { var data = JSON.parse(r.result); if (!data || !Array.isArray(data.projects)) throw new Error('invalid'); if (confirm('导入会覆盖当前全部数据，确定继续吗？')) { state = normalizeState(data); saveState(); render(); toast('数据已导入'); } } catch (e) { toast('备份文件无法识别'); } importInput.value = ''; }; r.readAsText(file); });
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(function () {});
   render();
-  checkTodayNotifications();
 })();
